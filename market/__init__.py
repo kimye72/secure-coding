@@ -79,6 +79,14 @@ def create_app(test_config=None):
     def handle_rate_limit_error(e):
         return render_template('rate_limit_error.html'), 429
 
+    @app.after_request
+    def add_security_headers(response):
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+        return response
+
     return app
 
 
@@ -400,11 +408,11 @@ def _register_routes(app):
     # 인증 — 로그아웃
     # -------------------------------------------------------------------
 
-    @app.route('/logout')
+    @app.route('/logout', methods=['POST'])
     def logout():
         session.clear()
         flash('로그아웃되었습니다.')
-        return redirect(url_for('main.index'))
+        return redirect(url_for('login'))
 
     # -------------------------------------------------------------------
     # 대시보드 — 상품 목록 + 검색/필터
