@@ -7,6 +7,8 @@ SQLAlchemy 모델 정의 (market/models.py)
 import uuid
 from datetime import datetime
 
+from werkzeug.security import generate_password_hash, check_password_hash
+
 from market.extensions import db
 
 
@@ -44,8 +46,18 @@ class User(db.Model):
         db.CheckConstraint("role IN ('USER', 'ADMIN')", name='ck_user_role'),
     )
 
+    def set_password(self, password):
+        """Werkzeug로 비밀번호를 해시하여 저장한다. 평문은 저장하지 않는다."""
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        """제공된 평문 비밀번호가 저장된 해시와 일치하는지 확인한다."""
+        return check_password_hash(self.password_hash, password)
+
     def __repr__(self):
+        # password_hash는 의도적으로 포함하지 않음
         return f'<User id={self.id} username={self.username} role={self.role}>'
+
 
 
 # ---------------------------------------------------------------------------
