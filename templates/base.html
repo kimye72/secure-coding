@@ -110,6 +110,7 @@
   <nav>
     {% if session.get('user_id') %}
       <a href="{{ url_for('dashboard') }}">대시보드</a>
+      <a href="{{ url_for('mypage') }}">마이페이지</a>
       <a href="{{ url_for('profile') }}">프로필</a>
       <a href="{{ url_for('report') }}">신고하기</a>
       <form action="{{ url_for('logout') }}" method="post" class="nav-form">

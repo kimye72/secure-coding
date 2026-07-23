@@ -515,6 +515,35 @@ def _register_routes(app):
         return render_template('profile.html', user=user)
 
     # -------------------------------------------------------------------
+    # 마이페이지 — 내가 등록한 상품 관리
+    # -------------------------------------------------------------------
+
+    @app.route('/mypage')
+    @login_required
+    def mypage():
+        current_user_id = session['user_id']
+        user = db.session.get(User, current_user_id)
+
+        products = (
+            Product.query
+            .filter(Product.seller_id == current_user_id)
+            .order_by(Product.created_at.desc(), Product.id.asc())
+            .all()
+        )
+        product_image_ids = {
+            product.id
+            for product in products
+            if product_image_exists(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id)
+        }
+
+        return render_template(
+            'mypage.html',
+            user=user,
+            products=products,
+            product_image_ids=product_image_ids,
+        )
+
+    # -------------------------------------------------------------------
     # 새 상품 등록 (강화된 버전)
     # -------------------------------------------------------------------
 

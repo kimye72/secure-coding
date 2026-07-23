@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}마이페이지{% endblock %}
+{% block content %}
+<h2>마이페이지</h2>
+<p>사용자명: {{ user.username }}</p>
+
+<p>
+  <a href="{{ url_for('new_product') }}">새 상품 등록</a>
+</p>
+
+<h3>내가 등록한 상품</h3>
+{% if products %}
+<table border="1">
+  <tr>
+    <th>대표 이미지</th>
+    <th>상품명</th>
+    <th>가격</th>
+    <th>상태</th>
+    <th>상세</th>
+    <th>수정</th>
+    <th>삭제</th>
+  </tr>
+  {% for product in products %}
+  <tr>
+    <td>
+      {% if product.id in product_image_ids %}
+      <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:80px;height:auto;">
+      {% else %}
+      <span>이미지 없음</span>
+      {% endif %}
+    </td>
+    <td>{{ product.title }}</td>
+    <td>{{ product.price }}원</td>
+    <td>{{ product.status }}</td>
+    <td><a href="{{ url_for('view_product', product_id=product.id) }}">상세보기</a></td>
+    <td><a href="{{ url_for('edit_product', product_id=product.id) }}">수정</a></td>
+    <td>
+      <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" onclick="return confirm('정말로 이 상품을 삭제하시겠습니까?');">삭제</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>등록한 상품이 없습니다.</p>
+<p><a href="{{ url_for('new_product') }}">첫 상품 등록하기</a></p>
+{% endif %}
+{% endblock %}
