@@ -5,11 +5,16 @@ from flask import Flask, request, redirect, url_for, session, flash, render_temp
 from flask_socketio import send
 
 from market.config import Config
-from market.extensions import socketio
+from market.extensions import db, socketio
 
 
-def create_app(config_class=Config):
-    """Flask 애플리케이션 팩토리"""
+def create_app(test_config=None):
+    """Flask 애플리케이션 팩토리
+
+    Args:
+        test_config: 테스트 시 적용할 설정 dict (예: {'TESTING': True, 'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:'})
+                     None이면 market.config.Config를 사용한다.
+    """
     app = Flask(
         __name__,
         template_folder=os.path.join(os.path.dirname(os.path.dirname(__file__)), 'templates'),
@@ -17,21 +22,33 @@ def create_app(config_class=Config):
         if os.path.isdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static'))
         else None,
     )
-    app.config.from_object(config_class)
 
-    # 확장 초기화
+    # 1. 기본 설정 로드
+    app.config.from_object(Config)
+
+    # 2. 테스트 설정 적용 (test_config가 제공된 경우 기본 설정을 덮어씀)
+    if test_config is not None:
+        app.config.update(test_config)
+
+    # 3. SQLAlchemy 초기화 (db.create_all()은 여기서 호출하지 않음)
+    db.init_app(app)
+
+    # 4. SocketIO 초기화
     socketio.init_app(app)
 
-    # 데이터베이스 설정
+    # 5. ORM 메타데이터 등록 (순환 import 방지를 위해 create_app 내부에서 import)
+    import market.models  # noqa: F401
+
+    # 6. 레거시 sqlite3 데이터베이스 헬퍼 등록
     _register_db(app)
 
-    # 기존 라우트 등록 (이후 단계에서 Blueprint로 분리)
+    # 7. 기존 라우트 등록 (이후 단계에서 Blueprint로 분리)
     _register_legacy_routes(app)
 
-    # Socket.IO 이벤트 등록
+    # 8. Socket.IO 이벤트 등록
     _register_socketio_events()
 
-    # 메인 Blueprint 등록 (GET /, GET /health)
+    # 9. 메인 Blueprint 등록 (GET /, GET /health)
     from market.main import main_bp
     app.register_blueprint(main_bp)
 
