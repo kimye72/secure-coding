@@ -17,14 +17,17 @@
         {# 판매자 전용 액션 — 서버에서 seller_id == current_user_id 검증됨 #}
         {% if trade.status == 'PENDING' %}
           <form method="post" action="{{ url_for('trade_accept', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit">수락</button>
           </form>
           <form method="post" action="{{ url_for('trade_reject', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" onclick="return confirm('이 거래 요청을 거절하시겠습니까?');">거절</button>
           </form>
         {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
           {# 수락된 거래는 판매자도 취소 가능 (상품이 RESERVED인 동안) #}
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" onclick="return confirm('수락한 거래를 취소하시겠습니까?');">취소</button>
           </form>
           <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
@@ -52,11 +55,13 @@
         {% if trade.status == 'PENDING' %}
           {# PENDING 취소: 구매자만 가능 #}
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" onclick="return confirm('거래 요청을 취소하시겠습니까?');">취소</button>
           </form>
         {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
           {# ACCEPTED 취소: 상품이 RESERVED인 동안 구매자도 취소 가능 #}
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" onclick="return confirm('수락된 거래를 취소하시겠습니까?');">취소</button>
           </form>
           <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>

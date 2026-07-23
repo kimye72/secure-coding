@@ -22,9 +22,11 @@
 {% if report.status == 'PENDING' %}
 <h3>신고 처리</h3>
 <form method="post" action="{{ url_for('admin_report_resolve', report_id=report.id) }}" style="display:inline;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit">해결 (RESOLVED)</button>
 </form>
 <form method="post" action="{{ url_for('admin_report_reject', report_id=report.id) }}" style="display:inline;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <button type="submit">기각 (DISMISSED)</button>
 </form>
 {% else %}

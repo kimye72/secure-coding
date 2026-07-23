@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 from flask import Flask, request, redirect, url_for, session, flash, render_template
 from flask_socketio import emit, join_room, leave_room
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from flask_wtf.csrf import CSRFError
 
 from market.config import Config
-from market.extensions import db, socketio
+from market.extensions import db, socketio, csrf
 
 
 def create_app(test_config=None):
@@ -38,6 +39,8 @@ def create_app(test_config=None):
     # 3. SQLAlchemy 초기화 (db.create_all()은 여기서 호출하지 않음)
     db.init_app(app)
 
+    csrf.init_app(app)
+
     # 4. Socket.IO 이벤트 핸들러 등록 — socketio.init_app()보다 먼저 호출해야 한다
     _register_socketio_events()
 
@@ -61,6 +64,10 @@ def create_app(test_config=None):
     # 9. 메인 Blueprint 등록 (GET /, GET /health)
     from market.main import main_bp
     app.register_blueprint(main_bp)
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        return render_template('csrf_error.html'), 400
 
     return app
 
