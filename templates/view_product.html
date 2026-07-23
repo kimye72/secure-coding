@@ -3,6 +3,19 @@
 {% block content %}
 <h2>{{ product.title }}</h2>
 <p>{{ product.description }}</p>
-<p>가격: {{ product.price }}</p>
+<p>가격: {{ product.price }}원</p>
+<p>상태: {{ product.status }}</p>
 <p>판매자: {{ seller.username if seller else '알 수 없음' }}</p>
+
+{% if is_owner %}
+  {# 판매자 전용 관리 컨트롤 — 서버에서 소유권 확인 후 렌더링 #}
+  <p>
+    <a href="{{ url_for('edit_product', product_id=product.id) }}">상품 수정</a>
+  </p>
+  <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}">
+    <button type="submit" onclick="return confirm('정말로 이 상품을 삭제하시겠습니까?');">상품 삭제</button>
+  </form>
+{% endif %}
+
+<p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
 {% endblock %}

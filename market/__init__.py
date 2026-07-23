@@ -15,8 +15,7 @@ def create_app(test_config=None):
     """Flask 애플리케이션 팩토리
 
     Args:
-        test_config: 테스트 시 적용할 설정 dict (예: {'TESTING': True, 'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:'})
-                     None이면 market.config.Config를 사용한다.
+        test_config: 테스트 시 적용할 설정 dict (예: {'TESTING': True, 'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:'})\n                     None이면 market.config.Config를 사용한다.
     """
     app = Flask(
         __name__,
@@ -93,14 +92,59 @@ def _get_login_required(app):
 
 
 # ---------------------------------------------------------------------------
+# 공유 상품 입력 유효성 검사 헬퍼
+# ---------------------------------------------------------------------------
+
+def _validate_product_fields(form):
+    """상품 폼 필드(title, description, price)를 검증하고 (title, description, price, error) 튜플을 반환한다.
+
+    규칙:
+    - title: 필수, strip 후 최대 100자
+    - description: 필수, strip 후 최대 2,000자
+    - price: 필수 양의 정수
+
+    오류가 없으면 error는 None이다.
+    seller_id는 절대로 폼에서 읽지 않는다.
+    """
+    title = (form.get('title') or '').strip()
+    description = (form.get('description') or '').strip()
+    price_raw = (form.get('price') or '').strip()
+
+    if not title:
+        return None, None, None, '상품 제목을 입력해 주세요.'
+    if len(title) > 100:
+        return None, None, None, '상품 제목은 100자 이하이어야 합니다.'
+
+    if not description:
+        return None, None, None, '상품 설명을 입력해 주세요.'
+    if len(description) > 2000:
+        return None, None, None, '상품 설명은 2,000자 이하이어야 합니다.'
+
+    try:
+        price = int(price_raw)
+    except (ValueError, TypeError):
+        return None, None, None, '가격은 정수여야 합니다.'
+    if price <= 0:
+        return None, None, None, '가격은 0보다 커야 합니다.'
+
+    return title, description, price, None
+
+
+# ---------------------------------------------------------------------------
 # 라우트 등록
 # ---------------------------------------------------------------------------
 
 def _register_routes(app):
     """모든 애플리케이션 라우트를 등록한다."""
-    from market.models import User, Product, Report
+    from market.models import User, Product, Trade, Report
 
     login_required = _get_login_required(app)
+
+    # 허용된 상품 상태 집합
+    _VALID_STATUSES = {Product.STATUS_SELLING, Product.STATUS_RESERVED, Product.STATUS_SOLD}
+
+    # 편집/삭제 시 공통으로 사용하는 권한 없음 메시지
+    _PRODUCT_AUTH_ERROR = '상품을 찾을 수 없거나 수정 권한이 없습니다.'
 
     # -------------------------------------------------------------------
     # 인증 — 회원가입
@@ -197,15 +241,48 @@ def _register_routes(app):
         return redirect(url_for('main.index'))
 
     # -------------------------------------------------------------------
-    # 대시보드
+    # 대시보드 — 상품 목록 + 검색/필터
     # -------------------------------------------------------------------
 
     @app.route('/dashboard')
     @login_required
     def dashboard():
         user = db.session.get(User, session['user_id'])
-        all_products = Product.query.all()
-        return render_template('dashboard.html', products=all_products, user=user)
+
+        # ── 검색어 처리 ────────────────────────────────────────────────
+        query_raw = (request.args.get('q') or '').strip()
+        query = query_raw[:100]  # 최대 100자로 제한
+
+        # ── 상태 필터 처리 ─────────────────────────────────────────────
+        status_param = (request.args.get('status') or '').strip().upper()
+        selected_status = status_param if status_param in _VALID_STATUSES else ''
+
+        # ── ORM 쿼리 구성 ──────────────────────────────────────────────
+        # SQLAlchemy ORM 쿼리만 사용; 문자열 SQL 없음
+        q = Product.query
+
+        if query:
+            # contains()는 내부적으로 LIKE 바인딩 파라미터를 사용하므로 SQL 인젝션 안전
+            # autoescape=True는 %, _ 같은 LIKE 메타문자를 이스케이프함
+            search_filter = db.or_(
+                Product.title.contains(query, autoescape=True),
+                Product.description.contains(query, autoescape=True),
+            )
+            q = q.filter(search_filter)
+
+        if selected_status:
+            q = q.filter(Product.status == selected_status)
+
+        products = q.order_by(Product.created_at.desc()).all()
+
+        return render_template(
+            'dashboard.html',
+            user=user,
+            products=products,
+            query=query,
+            selected_status=selected_status,
+            product_statuses=list(_VALID_STATUSES),
+        )
 
     # -------------------------------------------------------------------
     # 프로필
@@ -228,47 +305,35 @@ def _register_routes(app):
         return render_template('profile.html', user=user)
 
     # -------------------------------------------------------------------
-    # 새 상품 등록
+    # 새 상품 등록 (강화된 버전)
     # -------------------------------------------------------------------
 
     @app.route('/product/new', methods=['GET', 'POST'])
     @login_required
     def new_product():
         if request.method == 'POST':
-            title = (request.form.get('title') or '').strip()
-            description = (request.form.get('description') or '').strip()
-            price_raw = (request.form.get('price') or '').strip()
-
-            if not title:
-                flash('상품 제목을 입력해 주세요.')
-                return redirect(url_for('new_product'))
-            if not description:
-                flash('상품 설명을 입력해 주세요.')
-                return redirect(url_for('new_product'))
-
-            try:
-                price = int(price_raw)
-            except (ValueError, TypeError):
-                flash('가격은 정수여야 합니다.')
-                return redirect(url_for('new_product'))
-            if price <= 0:
-                flash('가격은 0보다 커야 합니다.')
+            # 공유 유효성 검사 헬퍼 사용 — seller_id는 절대로 폼에서 읽지 않음
+            title, description, price, error = _validate_product_fields(request.form)
+            if error:
+                flash(error)
                 return redirect(url_for('new_product'))
 
             new_prod = Product(
                 title=title,
                 description=description,
                 price=price,
-                seller_id=session['user_id'],
+                seller_id=session['user_id'],          # 항상 세션에서 설정
+                status=Product.STATUS_SELLING,          # 초기 상태는 항상 SELLING
             )
             try:
                 db.session.add(new_prod)
                 db.session.commit()
                 flash('상품이 등록되었습니다.')
+                return redirect(url_for('dashboard'))
             except SQLAlchemyError:
                 db.session.rollback()
                 flash('상품 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
-            return redirect(url_for('dashboard'))
+                return redirect(url_for('new_product'))
 
         return render_template('new_product.html')
 
@@ -282,9 +347,96 @@ def _register_routes(app):
         if not product:
             flash('상품을 찾을 수 없습니다.')
             return redirect(url_for('dashboard'))
-        # seller는 ORM 관계로 접근 (추가 쿼리 없음)
+
+        # seller는 ORM 관계로 접근
         seller = product.seller
-        return render_template('view_product.html', product=product, seller=seller)
+
+        # 소유권은 서버에서 결정 — 클라이언트 입력에 의존하지 않음
+        is_owner = (
+            session.get('user_id') is not None
+            and session['user_id'] == product.seller_id
+        )
+
+        return render_template(
+            'view_product.html',
+            product=product,
+            seller=seller,
+            is_owner=is_owner,
+        )
+
+    # -------------------------------------------------------------------
+    # 상품 수정 — GET/POST /product/<product_id>/edit
+    # -------------------------------------------------------------------
+
+    @app.route('/product/<product_id>/edit', methods=['GET', 'POST'])
+    @login_required
+    def edit_product(product_id):
+        product = db.session.get(Product, product_id)
+
+        # 상품 미존재 또는 비소유자: 동일한 제네릭 메시지로 정보 노출 방지
+        if product is None or product.seller_id != session['user_id']:
+            flash(_PRODUCT_AUTH_ERROR)
+            return redirect(url_for('dashboard'))
+
+        if request.method == 'POST':
+            # ── 필드 유효성 검사 ────────────────────────────────────────
+            title, description, price, error = _validate_product_fields(request.form)
+            if error:
+                flash(error)
+                return redirect(url_for('edit_product', product_id=product_id))
+
+            # ── 상태 유효성 검사 ─────────────────────────────────────────
+            status = (request.form.get('status') or '').strip().upper()
+            if status not in _VALID_STATUSES:
+                flash('올바르지 않은 상품 상태입니다.')
+                return redirect(url_for('edit_product', product_id=product_id))
+
+            # ── 안전한 필드만 업데이트 (seller_id 절대 변경하지 않음) ──
+            product.title = title
+            product.description = description
+            product.price = price
+            product.status = status
+
+            try:
+                db.session.commit()
+                flash('상품이 수정되었습니다.')
+                return redirect(url_for('view_product', product_id=product_id))
+            except SQLAlchemyError:
+                db.session.rollback()
+                flash('상품 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('edit_product', product_id=product_id))
+
+        # GET: 기존 값으로 폼 사전 채움
+        return render_template('edit_product.html', product=product)
+
+    # -------------------------------------------------------------------
+    # 상품 삭제 — POST /product/<product_id>/delete
+    # -------------------------------------------------------------------
+
+    @app.route('/product/<product_id>/delete', methods=['POST'])
+    @login_required
+    def delete_product(product_id):
+        product = db.session.get(Product, product_id)
+
+        # 상품 미존재 또는 비소유자: 동일한 제네릭 메시지로 정보 노출 방지
+        if product is None or product.seller_id != session['user_id']:
+            flash(_PRODUCT_AUTH_ERROR)
+            return redirect(url_for('dashboard'))
+
+        # 거래 기록이 있는 상품은 삭제 불가
+        if product.trades:
+            flash('거래 기록이 있는 상품은 삭제할 수 없습니다.')
+            return redirect(url_for('view_product', product_id=product_id))
+
+        try:
+            db.session.delete(product)
+            db.session.commit()
+            flash('상품이 삭제되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('상품 삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('dashboard'))
 
     # -------------------------------------------------------------------
     # 신고

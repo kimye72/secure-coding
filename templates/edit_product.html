@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}상품 수정{% endblock %}
+{% block content %}
+<h2>상품 수정</h2>
+<form method="post" action="{{ url_for('edit_product', product_id=product.id) }}">
+  <label for="title">제목</label>
+  <input type="text" id="title" name="title" maxlength="100" value="{{ product.title }}" required>
+
+  <label for="description">설명</label>
+  <textarea id="description" name="description" rows="6" maxlength="2000" required>{{ product.description }}</textarea>
+
+  <label for="price">가격 (원)</label>
+  <input type="number" id="price" name="price" min="1" value="{{ product.price }}" required>
+
+  <label for="status">상태</label>
+  <select id="status" name="status">
+    <option value="SELLING" {% if product.status == 'SELLING' %}selected{% endif %}>SELLING</option>
+    <option value="RESERVED" {% if product.status == 'RESERVED' %}selected{% endif %}>RESERVED</option>
+    <option value="SOLD" {% if product.status == 'SOLD' %}selected{% endif %}>SOLD</option>
+  </select>
+
+  <button type="submit">수정 저장</button>
+</form>
+<p><a href="{{ url_for('view_product', product_id=product.id) }}">상품 상세로 돌아가기</a></p>
+{% endblock %}
