@@ -5,9 +5,12 @@ from flask_socketio import SocketIO
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 db = SQLAlchemy()
 csrf = CSRFProtect()
+limiter = Limiter(key_func=get_remote_address)
 
 # 전역 SocketIO 객체 (아직 앱과 연결되지 않은 상태)
 # create_app() 내부에서 socketio.init_app(app)으로 초기화

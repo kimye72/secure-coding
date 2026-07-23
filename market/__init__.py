@@ -12,7 +12,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from flask_wtf.csrf import CSRFError
 
 from market.config import Config
-from market.extensions import db, socketio, csrf
+from market.extensions import db, socketio, csrf, limiter
+from flask_limiter.util import get_remote_address
 
 
 def create_app(test_config=None):
@@ -41,6 +42,11 @@ def create_app(test_config=None):
 
     csrf.init_app(app)
 
+    app.config.setdefault('RATELIMIT_STORAGE_URI', 'memory://')
+    app.config.setdefault('RATELIMIT_HEADERS_ENABLED', True)
+    # memory storage is for the current development/classroom environment and does not persist across process restarts.
+    limiter.init_app(app)
+
     # 4. Socket.IO 이벤트 핸들러 등록 — socketio.init_app()보다 먼저 호출해야 한다
     _register_socketio_events()
 
@@ -68,6 +74,10 @@ def create_app(test_config=None):
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
         return render_template('csrf_error.html'), 400
+
+    @app.errorhandler(429)
+    def handle_rate_limit_error(e):
+        return render_template('rate_limit_error.html'), 429
 
     return app
 
@@ -127,6 +137,17 @@ def _get_admin_required(app):
         return decorated_function
 
     return admin_required
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit identity helper
+# ---------------------------------------------------------------------------
+
+def _rate_limit_identity():
+    user_id = session.get('user_id')
+    if user_id:
+        return f'user:{user_id}'
+    return f'ip:{get_remote_address()}'
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +301,9 @@ def _register_routes(app):
 
     login_required = _get_login_required(app)
 
+    trade_state_action_limit = limiter.shared_limit('30 per hour', scope='trade-state-actions', key_func=_rate_limit_identity, methods=['POST'])
+    admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
+
     # 허용된 상품 상태 집합
     _VALID_STATUSES = {Product.STATUS_SELLING, Product.STATUS_RESERVED, Product.STATUS_SOLD}
 
@@ -291,6 +315,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/register', methods=['GET', 'POST'])
+    @limiter.limit('3 per hour', methods=['POST'])
     def register():
         if request.method == 'POST':
             username = (request.form.get('username') or '').strip()
@@ -347,6 +372,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/login', methods=['GET', 'POST'])
+    @limiter.limit('5 per minute;20 per hour', methods=['POST'])
     def login():
         if request.method == 'POST':
             username = request.form.get('username') or ''
@@ -449,6 +475,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/product/new', methods=['GET', 'POST'])
+    @limiter.limit('10 per hour', methods=['POST'], key_func=_rate_limit_identity)
     @login_required
     def new_product():
         if request.method == 'POST':
@@ -624,6 +651,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/product/<product_id>/trade/request', methods=['POST'])
+    @limiter.limit('10 per hour', methods=['POST'], key_func=_rate_limit_identity)
     @login_required
     def trade_request(product_id):
         current_user_id = session['user_id']
@@ -714,6 +742,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/trade/<trade_id>/accept', methods=['POST'])
+    @trade_state_action_limit
     @login_required
     def trade_accept(trade_id):
         current_user_id = session['user_id']
@@ -784,6 +813,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/trade/<trade_id>/reject', methods=['POST'])
+    @trade_state_action_limit
     @login_required
     def trade_reject(trade_id):
         current_user_id = session['user_id']
@@ -823,6 +853,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/trade/<trade_id>/cancel', methods=['POST'])
+    @trade_state_action_limit
     @login_required
     def trade_cancel(trade_id):
         current_user_id = session['user_id']
@@ -879,6 +910,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/report', methods=['GET', 'POST'])
+    @limiter.limit('5 per hour', methods=['POST'], key_func=_rate_limit_identity)
     @login_required
     def report():
         if request.method == 'POST':
@@ -1011,6 +1043,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/admin/report/<report_id>/resolve', methods=['POST'])
+    @admin_report_action_limit
     @admin_required
     def admin_report_resolve(report_id):
         try:
@@ -1044,6 +1077,7 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     @app.route('/admin/report/<report_id>/reject', methods=['POST'])
+    @admin_report_action_limit
     @admin_required
     def admin_report_reject(report_id):
         try:

@@ -9,3 +9,4 @@ dependencies:
     - flask-socketio
     - flask-sqlalchemy
     - flask-wtf==1.2.2
+    - flask-limiter==3.11.0
