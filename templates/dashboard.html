@@ -23,6 +23,11 @@
 <ul>
   {% for product in products %}
   <li>
+    {% if product.id in product_image_ids %}
+    <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:80px;height:auto;vertical-align:middle;margin-right:8px;">
+    {% else %}
+    <span style="display:inline-block;width:80px;margin-right:8px;">이미지 없음</span>
+    {% endif %}
     <a href="{{ url_for('view_product', product_id=product.id) }}">{{ product.title }}</a>
     - 가격: {{ product.price }}원
     - 상태: {{ product.status }}

@@ -6,13 +6,29 @@ import functools
 
 from datetime import datetime, timezone
 
-from flask import Flask, request, redirect, url_for, session, flash, render_template
+from flask import Flask, abort, request, redirect, send_file, url_for, session, flash, render_template
 from flask_socketio import emit, join_room, leave_room
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from flask_wtf.csrf import CSRFError
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from market.config import Config
 from market.extensions import db, socketio, csrf, limiter
+from market.product_images import (
+    MAX_PRODUCT_IMAGE_BYTES,
+    ProductImageError,
+    backup_existing_product_images,
+    cleanup_staged_product_image,
+    discard_product_image_backups,
+    get_product_image,
+    has_product_image_upload,
+    install_staged_product_image,
+    product_image_exists,
+    remove_file_if_exists,
+    remove_product_images,
+    restore_product_image_backups,
+    stage_product_image,
+)
 from flask_limiter.util import get_remote_address
 
 
@@ -39,6 +55,12 @@ def create_app(test_config=None):
 
     if not app.config.get('SECRET_KEY'):
         raise RuntimeError('SECRET_KEY 환경변수가 설정되지 않았습니다.')
+
+    app.config.setdefault('PRODUCT_IMAGE_MAX_BYTES', MAX_PRODUCT_IMAGE_BYTES)
+    app.config.setdefault(
+        'PRODUCT_IMAGE_UPLOAD_DIR',
+        os.path.join(app.instance_path, 'uploads', 'products'),
+    )
 
     # 3. SQLAlchemy 초기화 (db.create_all()은 여기서 호출하지 않음)
     db.init_app(app)
@@ -81,6 +103,10 @@ def create_app(test_config=None):
     @app.errorhandler(429)
     def handle_rate_limit_error(e):
         return render_template('rate_limit_error.html'), 429
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_request_entity_too_large(e):
+        return '업로드 파일이 너무 큽니다.', 413
 
     @app.after_request
     def add_security_headers(response):
@@ -452,11 +478,17 @@ def _register_routes(app):
             q = q.filter(Product.status == selected_status)
 
         products = q.order_by(Product.created_at.desc()).all()
+        product_image_ids = {
+            product.id
+            for product in products
+            if product_image_exists(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id)
+        }
 
         return render_template(
             'dashboard.html',
             user=user,
             products=products,
+            product_image_ids=product_image_ids,
             query=query,
             selected_status=selected_status,
             product_statuses=list(_VALID_STATUSES),
@@ -497,24 +529,81 @@ def _register_routes(app):
                 flash(error)
                 return redirect(url_for('new_product'))
 
-            new_prod = Product(
-                title=title,
-                description=description,
-                price=price,
-                seller_id=session['user_id'],          # 항상 세션에서 설정
-                status=Product.STATUS_SELLING,          # 초기 상태는 항상 SELLING
-            )
+            image_file = request.files.get('image')
+            staged_image = None
+            installed_image_path = None
+
             try:
+                new_prod = Product(
+                    title=title,
+                    description=description,
+                    price=price,
+                    seller_id=session['user_id'],          # 항상 세션에서 설정
+                    status=Product.STATUS_SELLING,          # 초기 상태는 항상 SELLING
+                )
                 db.session.add(new_prod)
+
+                if has_product_image_upload(image_file):
+                    db.session.flush()
+                    staged_image = stage_product_image(
+                        image_file,
+                        new_prod.id,
+                        app.config['PRODUCT_IMAGE_UPLOAD_DIR'],
+                        app.config['PRODUCT_IMAGE_MAX_BYTES'],
+                    )
+                    install_staged_product_image(staged_image)
+                    installed_image_path = staged_image.final_path
+
                 db.session.commit()
                 flash('상품이 등록되었습니다.')
                 return redirect(url_for('dashboard'))
+            except ProductImageError:
+                db.session.rollback()
+                cleanup_staged_product_image(staged_image)
+                if installed_image_path is not None:
+                    remove_file_if_exists(installed_image_path)
+                flash('상품 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('new_product'))
             except SQLAlchemyError:
                 db.session.rollback()
+                cleanup_staged_product_image(staged_image)
+                if installed_image_path is not None:
+                    remove_file_if_exists(installed_image_path)
                 flash('상품 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
                 return redirect(url_for('new_product'))
 
         return render_template('new_product.html')
+
+    # -------------------------------------------------------------------
+    # 상품 이미지 — GET /product/<product_id>/image
+    # -------------------------------------------------------------------
+
+    @app.route('/product/<product_id>/image')
+    def product_image(product_id):
+        try:
+            product_uuid = str(uuid.UUID(str(product_id)))
+        except (ValueError, TypeError, AttributeError):
+            abort(404)
+
+        product = db.session.get(Product, product_uuid)
+        if product is None:
+            abort(404)
+
+        image = get_product_image(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id)
+        if image is None:
+            abort(404)
+
+        response = send_file(
+            image.path,
+            mimetype=image.mime_type,
+            as_attachment=False,
+            download_name=f'product-{product.id}.{image.extension}',
+            conditional=True,
+        )
+        response.headers['Content-Disposition'] = (
+            f'inline; filename="product-{product.id}.{image.extension}"'
+        )
+        return response
 
     # -------------------------------------------------------------------
     # 상품 상세보기
@@ -563,6 +652,7 @@ def _register_routes(app):
             current_user_id=current_user_id,
             active_trade=active_trade,
             can_request_trade=can_request_trade,
+            product_has_image=product_image_exists(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id),
         )
 
     # -------------------------------------------------------------------
@@ -611,23 +701,59 @@ def _register_routes(app):
                         flash('대기 중인 거래 요청이 있는 상품의 상태는 직접 변경할 수 없습니다.')
                         return redirect(url_for('edit_product', product_id=product_id))
 
-            # ── 안전한 필드만 업데이트 (seller_id 절대 변경하지 않음) ──
-            product.title = title
-            product.description = description
-            product.price = price
-            product.status = status
+            image_file = request.files.get('image')
+            staged_image = None
+            image_backups = []
+            installed_image_path = None
 
             try:
+                if has_product_image_upload(image_file):
+                    staged_image = stage_product_image(
+                        image_file,
+                        product.id,
+                        app.config['PRODUCT_IMAGE_UPLOAD_DIR'],
+                        app.config['PRODUCT_IMAGE_MAX_BYTES'],
+                    )
+                    image_backups = backup_existing_product_images(
+                        app.config['PRODUCT_IMAGE_UPLOAD_DIR'],
+                        product.id,
+                    )
+                    install_staged_product_image(staged_image)
+                    installed_image_path = staged_image.final_path
+
+                # ── 안전한 필드만 업데이트 (seller_id 절대 변경하지 않음) ──
+                product.title = title
+                product.description = description
+                product.price = price
+                product.status = status
+
                 db.session.commit()
+                discard_product_image_backups(image_backups)
                 flash('상품이 수정되었습니다.')
                 return redirect(url_for('view_product', product_id=product_id))
+            except ProductImageError:
+                db.session.rollback()
+                cleanup_staged_product_image(staged_image)
+                if installed_image_path is not None:
+                    remove_file_if_exists(installed_image_path)
+                restore_product_image_backups(image_backups)
+                flash('상품 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('edit_product', product_id=product_id))
             except SQLAlchemyError:
                 db.session.rollback()
+                cleanup_staged_product_image(staged_image)
+                if installed_image_path is not None:
+                    remove_file_if_exists(installed_image_path)
+                restore_product_image_backups(image_backups)
                 flash('상품 수정 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
                 return redirect(url_for('edit_product', product_id=product_id))
 
         # GET: 기존 값으로 폼 사전 채움
-        return render_template('edit_product.html', product=product)
+        return render_template(
+            'edit_product.html',
+            product=product,
+            product_has_image=product_image_exists(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id),
+        )
 
     # -------------------------------------------------------------------
     # 상품 삭제 — POST /product/<product_id>/delete
@@ -649,8 +775,10 @@ def _register_routes(app):
             return redirect(url_for('view_product', product_id=product_id))
 
         try:
+            product_id_to_delete = product.id
             db.session.delete(product)
             db.session.commit()
+            remove_product_images(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product_id_to_delete)
             flash('상품이 삭제되었습니다.')
         except SQLAlchemyError:
             db.session.rollback()

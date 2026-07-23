@@ -7,6 +7,8 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "market.db"
 
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY')
+    PRODUCT_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+    MAX_CONTENT_LENGTH = 6 * 1024 * 1024
 
     # --- SQLAlchemy 설정 ---
     SQLALCHEMY_DATABASE_URI = os.environ.get(

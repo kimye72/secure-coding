@@ -6,5 +6,6 @@ market.db
 __pycache__/
 *.py[cod]
 .pytest_cache/
+instance/uploads/products/
 step*.diff
 *.pptx

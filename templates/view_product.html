@@ -2,6 +2,11 @@
 {% block title %}상품 상세보기{% endblock %}
 {% block content %}
 <h2>{{ product.title }}</h2>
+{% if product_has_image %}
+<img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:360px;height:auto;">
+{% else %}
+<p>대표 이미지가 없습니다.</p>
+{% endif %}
 <p>{{ product.description }}</p>
 <p>가격: {{ product.price }}원</p>
 <p>상태: {{ product.status }}</p>
