@@ -41,6 +41,8 @@ class User(db.Model):
     sale_trades = db.relationship('Trade', back_populates='seller', foreign_keys='Trade.seller_id')
     submitted_reports = db.relationship('Report', back_populates='reporter', foreign_keys='Report.reporter_id')
     handled_reports = db.relationship('Report', back_populates='handler', foreign_keys='Report.handled_by')
+    written_reviews = db.relationship('Review', back_populates='reviewer', foreign_keys='Review.reviewer_id')
+    received_reviews = db.relationship('Review', back_populates='reviewee', foreign_keys='Review.reviewee_id')
 
     __table_args__ = (
         db.CheckConstraint("role IN ('USER', 'ADMIN')", name='ck_user_role'),
@@ -89,6 +91,7 @@ class Product(db.Model):
     # 관계 (seller를 삭제해도 상품이 삭제되지 않음, cascade 없음)
     seller = db.relationship('User', back_populates='products', foreign_keys=[seller_id])
     trades = db.relationship('Trade', back_populates='product', foreign_keys='Trade.product_id')
+    reviews = db.relationship('Review', back_populates='product', foreign_keys='Review.product_id')
 
     __table_args__ = (
         db.CheckConstraint('price > 0', name='ck_product_price_positive'),
@@ -113,6 +116,7 @@ class Trade(db.Model):
     STATUS_ACCEPTED = 'ACCEPTED'
     STATUS_REJECTED = 'REJECTED'
     STATUS_CANCELLED = 'CANCELLED'
+    STATUS_COMPLETED = 'COMPLETED'
 
     id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
     product_id = db.Column(db.String(36), db.ForeignKey('product.id'), index=True, nullable=False)
@@ -131,17 +135,49 @@ class Trade(db.Model):
     product = db.relationship('Product', back_populates='trades', foreign_keys=[product_id])
     buyer = db.relationship('User', back_populates='purchase_trades', foreign_keys=[buyer_id])
     seller = db.relationship('User', back_populates='sale_trades', foreign_keys=[seller_id])
+    reviews = db.relationship('Review', back_populates='trade', foreign_keys='Review.trade_id')
 
     __table_args__ = (
         db.CheckConstraint('buyer_id != seller_id', name='ck_trade_buyer_ne_seller'),
         db.CheckConstraint(
-            "status IN ('PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED')",
+            "status IN ('PENDING', 'ACCEPTED', 'REJECTED', 'CANCELLED', 'COMPLETED')",
             name='ck_trade_status',
         ),
     )
 
     def __repr__(self):
         return f'<Trade id={self.id} status={self.status}>'
+
+
+# ---------------------------------------------------------------------------
+# Review
+# ---------------------------------------------------------------------------
+
+class Review(db.Model):
+    __tablename__ = 'review'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    trade_id = db.Column(db.String(36), db.ForeignKey('trade.id'), index=True, nullable=False)
+    product_id = db.Column(db.String(36), db.ForeignKey('product.id'), index=True, nullable=False)
+    reviewer_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    reviewee_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    rating = db.Column(db.Integer, nullable=False)
+    content = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    trade = db.relationship('Trade', back_populates='reviews', foreign_keys=[trade_id])
+    product = db.relationship('Product', back_populates='reviews', foreign_keys=[product_id])
+    reviewer = db.relationship('User', back_populates='written_reviews', foreign_keys=[reviewer_id])
+    reviewee = db.relationship('User', back_populates='received_reviews', foreign_keys=[reviewee_id])
+
+    __table_args__ = (
+        db.CheckConstraint('rating >= 1 AND rating <= 5', name='ck_review_rating_range'),
+        db.CheckConstraint('reviewer_id != reviewee_id', name='ck_review_reviewer_ne_reviewee'),
+        db.UniqueConstraint('trade_id', 'reviewer_id', name='uq_review_trade_reviewer'),
+    )
+
+    def __repr__(self):
+        return f'<Review id={self.id} trade_id={self.trade_id} rating={self.rating}>'
 
 
 # ---------------------------------------------------------------------------

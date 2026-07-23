@@ -265,6 +265,28 @@ def _like_contains_pattern(value):
     return f'%{escaped}%'
 
 
+def _validate_review_fields(form):
+    rating_raw = (form.get('rating') or '').strip()
+    try:
+        rating = int(rating_raw)
+    except (ValueError, TypeError):
+        return None, None, '평점을 올바르게 선택해 주세요.'
+
+    if rating < 1 or rating > 5:
+        return None, None, '평점은 1점에서 5점 사이여야 합니다.'
+
+    content = (form.get('content') or '').strip()
+    if not content:
+        return rating, None, None
+    if len(content) > 500:
+        return None, None, '리뷰 내용은 500자 이하로 입력해 주세요.'
+    for char in content:
+        if unicodedata.category(char).startswith('C'):
+            return None, None, '리뷰 내용을 올바르게 입력해 주세요.'
+
+    return rating, content, None
+
+
 # ---------------------------------------------------------------------------
 # 채팅 권한 검증 헬퍼
 # ---------------------------------------------------------------------------
@@ -373,11 +395,13 @@ def _resolve_report_target(target_type, target_id):
 
 def _register_routes(app):
     """모든 애플리케이션 라우트를 등록한다."""
-    from market.models import User, Product, Trade, Report
+    from market.models import User, Product, Trade, Review, Report
 
     login_required = _get_login_required(app)
 
     trade_state_action_limit = limiter.shared_limit('30 per hour', scope='trade-state-actions', key_func=_rate_limit_identity, methods=['POST'])
+    trade_completion_action_limit = limiter.shared_limit('20 per hour', scope='trade-completion-actions', key_func=_rate_limit_identity, methods=['POST'])
+    review_action_limit = limiter.shared_limit('10 per hour', scope='review-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_user_action_limit = limiter.shared_limit('30 per hour', scope='admin-user-actions', key_func=_rate_limit_identity, methods=['POST'])
 
@@ -386,6 +410,45 @@ def _register_routes(app):
 
     # 편집/삭제 시 공통으로 사용하는 권한 없음 메시지
     _PRODUCT_AUTH_ERROR = '상품을 찾을 수 없거나 수정 권한이 없습니다.'
+
+    def _review_context(trade_id, reviewer_id):
+        validated_trade_id = _normalize_trade_id(trade_id)
+        if validated_trade_id is None:
+            return None
+
+        trade = db.session.get(Trade, validated_trade_id)
+        if trade is None or trade.status != Trade.STATUS_COMPLETED:
+            return None
+
+        product = db.session.get(Product, trade.product_id)
+        if product is None or product.id != trade.product_id or product.seller_id != trade.seller_id:
+            return None
+
+        if reviewer_id == trade.buyer_id:
+            reviewee_id = trade.seller_id
+        elif reviewer_id == trade.seller_id:
+            reviewee_id = trade.buyer_id
+        else:
+            return None
+
+        if reviewee_id == reviewer_id:
+            return None
+
+        reviewee = db.session.get(User, reviewee_id)
+        if reviewee is None:
+            return None
+
+        existing_review = Review.query.filter_by(
+            trade_id=trade.id,
+            reviewer_id=reviewer_id,
+        ).first()
+
+        return {
+            'trade': trade,
+            'product': product,
+            'reviewee': reviewee,
+            'existing_review': existing_review,
+        }
 
     # -------------------------------------------------------------------
     # 인증 — 회원가입
@@ -722,6 +785,16 @@ def _register_routes(app):
                 and active_trade is None
             )
 
+        product_reviews = (
+            Review.query
+            .filter(Review.product_id == product.id)
+            .order_by(Review.created_at.desc(), Review.id.asc())
+            .all()
+        )
+        product_average_rating = None
+        if product_reviews:
+            product_average_rating = sum(review.rating for review in product_reviews) / len(product_reviews)
+
         return render_template(
             'view_product.html',
             product=product,
@@ -731,6 +804,40 @@ def _register_routes(app):
             active_trade=active_trade,
             can_request_trade=can_request_trade,
             product_has_image=product_image_exists(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product.id),
+            product_reviews=product_reviews,
+            product_average_rating=product_average_rating,
+        )
+
+    # -------------------------------------------------------------------
+    # 사용자 리뷰 — GET /user/<user_id>/reviews
+    # -------------------------------------------------------------------
+
+    @app.route('/user/<user_id>/reviews')
+    def user_reviews(user_id):
+        try:
+            target_user_id = str(uuid.UUID(str(user_id)))
+        except (ValueError, TypeError, AttributeError):
+            abort(404)
+
+        target_user = db.session.get(User, target_user_id)
+        if target_user is None:
+            abort(404)
+
+        reviews = (
+            Review.query
+            .filter(Review.reviewee_id == target_user.id)
+            .order_by(Review.created_at.desc(), Review.id.asc())
+            .all()
+        )
+        average_rating = None
+        if reviews:
+            average_rating = sum(review.rating for review in reviews) / len(reviews)
+
+        return render_template(
+            'user_reviews.html',
+            target_user=target_user,
+            reviews=reviews,
+            average_rating=average_rating,
         )
 
     # -------------------------------------------------------------------
@@ -953,11 +1060,23 @@ def _register_routes(app):
             .all()
         )
 
+        visible_trade_ids = [trade.id for trade in outgoing_trades + incoming_trades]
+        reviewed_trade_ids = set()
+        if visible_trade_ids:
+            reviewed_trade_ids = {
+                review.trade_id
+                for review in Review.query.filter(
+                    Review.reviewer_id == current_user_id,
+                    Review.trade_id.in_(visible_trade_ids),
+                ).all()
+            }
+
         return render_template(
             'trades.html',
             outgoing_trades=outgoing_trades,
             incoming_trades=incoming_trades,
             current_user_id=current_user_id,
+            reviewed_trade_ids=reviewed_trade_ids,
         )
 
     # -------------------------------------------------------------------
@@ -1127,6 +1246,112 @@ def _register_routes(app):
             flash(_TRADE_AUTH_ERROR)
 
         return redirect(url_for('trades'))
+
+    # -------------------------------------------------------------------
+    # 거래 완료 — POST /trade/<trade_id>/complete
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/complete', methods=['POST'])
+    @trade_completion_action_limit
+    @login_required
+    def trade_complete(trade_id):
+        current_user_id = session['user_id']
+        validated_trade_id = _normalize_trade_id(trade_id)
+        if validated_trade_id is None:
+            flash('거래를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        trade = db.session.get(Trade, validated_trade_id)
+        if trade is None or trade.buyer_id != current_user_id:
+            flash('거래를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        if trade.status == Trade.STATUS_COMPLETED:
+            flash('이미 완료된 거래입니다.')
+            return redirect(url_for('trades'))
+
+        if trade.status != Trade.STATUS_ACCEPTED:
+            flash('거래를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        product = db.session.get(Product, trade.product_id)
+        if product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
+            flash('거래를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        try:
+            trade.status = Trade.STATUS_COMPLETED
+            product.status = Product.STATUS_SOLD
+            db.session.commit()
+            flash('거래가 완료되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('trades'))
+
+    # -------------------------------------------------------------------
+    # 거래 리뷰 — GET/POST /trade/<trade_id>/review
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/review', methods=['GET', 'POST'])
+    @review_action_limit
+    @login_required
+    def trade_review(trade_id):
+        current_user_id = session['user_id']
+        context = _review_context(trade_id, current_user_id)
+        if context is None:
+            flash('리뷰를 작성할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        if context['existing_review'] is not None:
+            if request.method == 'POST':
+                flash('이미 이 거래에 대한 리뷰를 작성했습니다.')
+                return redirect(url_for('trades'))
+            return render_template(
+                'review_form.html',
+                trade=context['trade'],
+                product=context['product'],
+                reviewee=context['reviewee'],
+                already_reviewed=True,
+            )
+
+        if request.method == 'POST':
+            rating, content, error = _validate_review_fields(request.form)
+            if error:
+                flash(error)
+                return redirect(url_for('trade_review', trade_id=context['trade'].id))
+
+            review = Review(
+                trade_id=context['trade'].id,
+                product_id=context['product'].id,
+                reviewer_id=current_user_id,
+                reviewee_id=context['reviewee'].id,
+                rating=rating,
+                content=content,
+            )
+
+            try:
+                db.session.add(review)
+                db.session.commit()
+                flash('리뷰가 등록되었습니다.')
+                return redirect(url_for('trades'))
+            except IntegrityError:
+                db.session.rollback()
+                flash('리뷰를 등록할 수 없습니다.')
+                return redirect(url_for('trades'))
+            except SQLAlchemyError:
+                db.session.rollback()
+                flash('리뷰 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('trade_review', trade_id=context['trade'].id))
+
+        return render_template(
+            'review_form.html',
+            trade=context['trade'],
+            product=context['product'],
+            reviewee=context['reviewee'],
+            already_reviewed=False,
+        )
 
     # -------------------------------------------------------------------
     # 신고

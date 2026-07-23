@@ -31,6 +31,12 @@
             <button type="submit" onclick="return confirm('수락한 거래를 취소하시겠습니까?');">취소</button>
           </form>
           <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
+        {% elif trade.status == 'COMPLETED' %}
+          {% if trade.id not in reviewed_trade_ids %}
+          <a href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
+          {% else %}
+          <span>리뷰 작성 완료</span>
+          {% endif %}
         {% endif %}
         {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
       </li>
@@ -60,11 +66,21 @@
           </form>
         {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
           {# ACCEPTED 취소: 상품이 RESERVED인 동안 구매자도 취소 가능 #}
+          <form method="post" action="{{ url_for('trade_complete', trade_id=trade.id) }}" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" onclick="return confirm('거래를 완료하시겠습니까?');">거래 완료</button>
+          </form>
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" onclick="return confirm('수락된 거래를 취소하시겠습니까?');">취소</button>
           </form>
           <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
+        {% elif trade.status == 'COMPLETED' %}
+          {% if trade.id not in reviewed_trade_ids %}
+          <a href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
+          {% else %}
+          <span>리뷰 작성 완료</span>
+          {% endif %}
         {% endif %}
         {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
       </li>
