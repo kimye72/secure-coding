@@ -95,6 +95,34 @@ def _get_login_required(app):
 
 
 # ---------------------------------------------------------------------------
+# 관리자 권한 가드 (admin-required decorator)
+# ---------------------------------------------------------------------------
+
+def _get_admin_required(app):
+    """앱 컨텍스트에서 User 모델에 접근하는 admin_required 데코레이터를 반환한다."""
+    from market.models import User
+
+    def admin_required(f):
+        @functools.wraps(f)
+        def decorated_function(*args, **kwargs):
+            user_id = session.get('user_id')
+            if not user_id:
+                flash('권한이 없습니다.')
+                return redirect(url_for('login'))
+
+            user = db.session.get(User, user_id)
+            if user is None or not user.is_active or user.role != User.ROLE_ADMIN:
+                flash('권한이 없습니다.')
+                return redirect(url_for('dashboard'))
+
+            return f(*args, **kwargs)
+
+        return decorated_function
+
+    return admin_required
+
+
+# ---------------------------------------------------------------------------
 # 공유 상품 입력 유효성 검사 헬퍼
 # ---------------------------------------------------------------------------
 
@@ -211,6 +239,28 @@ def _normalize_trade_id(value):
         return str(uuid.UUID(str(value)))
     except (ValueError, TypeError, AttributeError):
         return None
+
+def _resolve_report_target(target_type, target_id):
+    """target_type과 target_id를 검증하고 대상을 반환한다.
+    실패 시 None을 반환하며, 오류 상세를 노출하지 않는다."""
+    from market.models import User, Product, Report
+
+    if target_type not in (Report.TARGET_USER, Report.TARGET_PRODUCT):
+        return None
+
+    try:
+        str(uuid.UUID(str(target_id)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+    try:
+        if target_type == Report.TARGET_USER:
+            return db.session.get(User, target_id)
+        elif target_type == Report.TARGET_PRODUCT:
+            return db.session.get(Product, target_id)
+    except SQLAlchemyError:
+        db.session.rollback()
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -829,44 +879,192 @@ def _register_routes(app):
             target_id = (request.form.get('target_id') or '').strip()
             reason = (request.form.get('reason') or '').strip()
 
-            valid_target_types = {Report.TARGET_USER, Report.TARGET_PRODUCT}
+            target = _resolve_report_target(target_type, target_id)
+            if target is None:
+                flash('신고 대상을 찾을 수 없거나 올바르지 않은 요청입니다.')
+                return redirect(url_for('report'))
 
-            if target_type not in valid_target_types:
-                flash('신고 대상 유형이 올바르지 않습니다.')
-                return redirect(url_for('report'))
-            if not target_id:
-                flash('신고 대상 ID를 입력해 주세요.')
-                return redirect(url_for('report'))
             if not reason:
                 flash('신고 사유를 입력해 주세요.')
                 return redirect(url_for('report'))
-
-            if target_type == Report.TARGET_USER:
-                target = db.session.get(User, target_id)
-
-            else:
-                target = db.session.get(Product, target_id)
-
-            if target is None:
-                flash('신고 대상을 찾을 수 없습니다.')
+            if '\x00' in reason:
+                flash('올바르지 않은 신고 사유입니다.')
+                return redirect(url_for('report'))
+            if len(reason) > 1000:
+                flash('신고 사유는 1000자 이하여야 합니다.')
                 return redirect(url_for('report'))
 
-            new_report = Report(
-                reporter_id=session['user_id'],
-                target_type=target_type,
-                target_id=target_id,
-                reason=reason,
-            )
+            current_user_id = session['user_id']
+
+            # 본인 신고 방지
+            if target_type == Report.TARGET_USER and target.id == current_user_id:
+                flash('자기 자신을 신고할 수 없습니다.')
+                return redirect(url_for('report'))
+            if target_type == Report.TARGET_PRODUCT and target.seller_id == current_user_id:
+                flash('자신의 상품을 신고할 수 없습니다.')
+                return redirect(url_for('report'))
+
+            # 중복 접수 방지
             try:
+                existing_report = Report.query.filter_by(
+                    reporter_id=current_user_id,
+                    target_type=target_type,
+                    target_id=target.id,
+                    status=Report.STATUS_PENDING,
+                ).first()
+
+                if existing_report is not None:
+                    flash('해당 대상에 대해 이미 처리 대기 중인 신고가 있습니다.')
+                    return redirect(url_for('dashboard'))
+
+                new_report = Report(
+                    reporter_id=current_user_id,
+                    target_type=target_type,
+                    target_id=target.id,
+                    reason=reason,
+                    status=Report.STATUS_PENDING,
+                )
+
                 db.session.add(new_report)
                 db.session.commit()
                 flash('신고가 접수되었습니다.')
+
             except SQLAlchemyError:
                 db.session.rollback()
                 flash('신고 접수 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
-            return redirect(url_for('dashboard'))
 
+            return redirect(url_for('dashboard'))
         return render_template('report.html')
+
+    # -------------------------------------------------------------------
+    # 관리자 - 신고 목록
+    # -------------------------------------------------------------------
+
+    admin_required = _get_admin_required(app)
+
+    @app.route('/admin/reports')
+    @admin_required
+    def admin_reports():
+        status_filter = request.args.get('status')
+        q = Report.query
+
+        valid_statuses = {Report.STATUS_PENDING, Report.STATUS_RESOLVED, Report.STATUS_DISMISSED}
+        if status_filter in valid_statuses:
+            q = q.filter(Report.status == status_filter)
+
+        reports = q.order_by(Report.created_at.desc()).all()
+
+        report_data = []
+        for r in reports:
+            target_summary = "삭제되었거나 존재하지 않는 대상"
+            if r.target_type == Report.TARGET_USER:
+                target_user = db.session.get(User, r.target_id)
+                target_summary = target_user.username if target_user else "삭제되었거나 존재하지 않는 사용자"
+            elif r.target_type == Report.TARGET_PRODUCT:
+                target_product = db.session.get(Product, r.target_id)
+                target_summary = target_product.title if target_product else "삭제되었거나 존재하지 않는 상품"
+
+            report_data.append({
+                'report': r,
+                'target_summary': target_summary
+            })
+
+        return render_template('admin_reports.html', report_data=report_data, status_filter=status_filter, statuses=valid_statuses)
+
+    # -------------------------------------------------------------------
+    # 관리자 - 신고 상세
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/report/<report_id>')
+    @admin_required
+    def admin_report_detail(report_id):
+        try:
+            report_uuid = str(uuid.UUID(str(report_id)))
+        except (ValueError, TypeError, AttributeError):
+            flash('올바르지 않은 신고 ID입니다.')
+            return redirect(url_for('admin_reports'))
+
+        report = db.session.get(Report, report_uuid)
+        if report is None:
+            flash('신고를 찾을 수 없습니다.')
+            return redirect(url_for('admin_reports'))
+
+        target_summary = "삭제되었거나 존재하지 않는 대상"
+        if report.target_type == Report.TARGET_USER:
+            target_user = db.session.get(User, report.target_id)
+            target_summary = target_user.username if target_user else "삭제되었거나 존재하지 않는 사용자"
+        elif report.target_type == Report.TARGET_PRODUCT:
+            target_product = db.session.get(Product, report.target_id)
+            target_summary = target_product.title if target_product else "삭제되었거나 존재하지 않는 상품"
+
+        return render_template('admin_report_detail.html', report=report, target_summary=target_summary)
+
+    # -------------------------------------------------------------------
+    # 관리자 - 신고 처리 (해결)
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/report/<report_id>/resolve', methods=['POST'])
+    @admin_required
+    def admin_report_resolve(report_id):
+        try:
+            report_uuid = str(uuid.UUID(str(report_id)))
+        except (ValueError, TypeError, AttributeError):
+            flash('올바르지 않은 신고 ID입니다.')
+            return redirect(url_for('admin_reports'))
+
+        report = db.session.get(Report, report_uuid)
+        if report is None:
+            flash('신고를 찾을 수 없습니다.')
+            return redirect(url_for('admin_reports'))
+
+        if report.status != Report.STATUS_PENDING:
+            flash('이미 처리된 신고입니다.')
+            return redirect(url_for('admin_report_detail', report_id=report_id))
+
+        report.status = Report.STATUS_RESOLVED
+        report.handled_by = session['user_id']
+
+        try:
+            db.session.commit()
+            flash('신고가 해결 처리되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('신고 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+        return redirect(url_for('admin_report_detail', report_id=report_id))
+
+    # -------------------------------------------------------------------
+    # 관리자 - 신고 처리 (거절)
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/report/<report_id>/reject', methods=['POST'])
+    @admin_required
+    def admin_report_reject(report_id):
+        try:
+            report_uuid = str(uuid.UUID(str(report_id)))
+        except (ValueError, TypeError, AttributeError):
+            flash('올바르지 않은 신고 ID입니다.')
+            return redirect(url_for('admin_reports'))
+
+        report = db.session.get(Report, report_uuid)
+        if report is None:
+            flash('신고를 찾을 수 없습니다.')
+            return redirect(url_for('admin_reports'))
+
+        if report.status != Report.STATUS_PENDING:
+            flash('이미 처리된 신고입니다.')
+            return redirect(url_for('admin_report_detail', report_id=report_id))
+
+        report.status = Report.STATUS_DISMISSED
+        report.handled_by = session['user_id']
+
+        try:
+            db.session.commit()
+            flash('신고가 기각 처리되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('신고 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('admin_report_detail', report_id=report_id))
 
     # -------------------------------------------------------------------
     # 채팅 페이지 — GET /trade/<trade_id>/chat
