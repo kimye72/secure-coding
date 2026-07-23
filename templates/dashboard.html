@@ -39,33 +39,4 @@
   <p>검색 결과가 없습니다.</p>
 {% endif %}
 <p><a href="{{ url_for('new_product') }}">새 상품 등록</a> | <a href="{{ url_for('trades') }}">내 거래 내역</a></p>
-
-<h3>실시간 채팅</h3>
-<div id="chat">
-  <ul id="messages"></ul>
-  <input id="chat_input" type="text" placeholder="메시지를 입력하세요">
-  <button onclick="sendMessage()">전송</button>
-</div>
-
-<script type="text/javascript">
-  var socket = io();
-  socket.on('connect', function() {
-    console.log("채팅 서버에 연결됨");
-  });
-  socket.on('message', function(data) {
-    var messages = document.getElementById('messages');
-    var item = document.createElement('li');
-    item.textContent = data.username + ": " + data.message;
-    messages.appendChild(item);
-    window.scrollTo(0, document.body.scrollHeight);
-  });
-  function sendMessage() {
-    var input = document.getElementById('chat_input');
-    var message = input.value;
-    if (message) {
-      socket.emit('send_message', { 'username': "{{ user.username }}", 'message': message });
-      input.value = "";
-    }
-  }
-</script>
 {% endblock %}

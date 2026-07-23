@@ -1,10 +1,13 @@
 from market.models import Product
 import os
 import re
+import uuid
 import functools
 
+from datetime import datetime, timezone
+
 from flask import Flask, request, redirect, url_for, session, flash, render_template
-from flask_socketio import send
+from flask_socketio import emit, join_room, leave_room
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from market.config import Config
@@ -35,13 +38,16 @@ def create_app(test_config=None):
     # 3. SQLAlchemy 초기화 (db.create_all()은 여기서 호출하지 않음)
     db.init_app(app)
 
-    # 4. SocketIO 초기화
+    # 4. Socket.IO 이벤트 핸들러 등록 — socketio.init_app()보다 먼저 호출해야 한다
+    _register_socketio_events()
+
+    # 5. SocketIO 초기화
     socketio.init_app(app)
 
-    # 5. ORM 메타데이터 등록 (순환 import 방지를 위해 create_app 내부에서 import)
+    # 6. ORM 메타데이터 등록 (순환 import 방지를 위해 create_app 내부에서 import)
     import market.models  # noqa: F401
 
-    # 6. app.init_db 호환성 유지 (app.py에서 호출)
+    # 7. app.init_db 호환성 유지 (app.py에서 호출)
     def init_db():
         """ORM 스키마를 앱 컨텍스트 안에서 생성한다."""
         with app.app_context():
@@ -49,11 +55,8 @@ def create_app(test_config=None):
 
     app.init_db = init_db
 
-    # 7. 라우트 등록
+    # 8. 라우트 등록
     _register_routes(app)
-
-    # 8. Socket.IO 이벤트 등록
-    _register_socketio_events()
 
     # 9. 메인 Blueprint 등록 (GET /, GET /health)
     from market.main import main_bp
@@ -128,6 +131,86 @@ def _validate_product_fields(form):
         return None, None, None, '가격은 0보다 커야 합니다.'
 
     return title, description, price, None
+
+
+# ---------------------------------------------------------------------------
+# 채팅 권한 검증 헬퍼
+# ---------------------------------------------------------------------------
+
+def _authorize_trade_chat(trade_id, user_id):
+    """trade_id와 user_id를 검증하고 (user, trade, product)를 반환한다.
+
+    아래 열 가지 조건이 모두 충족돼야 성공한다:
+    1. user_id 존재
+    2. User 존재
+    3. User.is_active == True
+    4. Trade 존재
+    5. Product 존재
+    6. Trade.product_id == Product.id
+    7. Trade.seller_id == Product.seller_id
+    8. user.id == Trade.buyer_id 또는 Trade.seller_id
+    9. Trade.status == ACCEPTED
+    10. Product.status == RESERVED
+
+    실패 시 (None, None, None)을 반환한다. 어느 조건이 실패했는지 노출하지 않는다.
+    """
+    from market.models import User, Trade, Product
+
+    if not user_id or not trade_id:
+        return None, None, None
+
+    try:
+        user = db.session.get(User, user_id)
+        if user is None or not user.is_active:
+            return None, None, None
+
+        trade = db.session.get(Trade, trade_id)
+        if trade is None:
+            return None, None, None
+
+        product = db.session.get(Product, trade.product_id)
+        if product is None:
+            return None, None, None
+
+        # 참조 무결성 교차 확인
+        if trade.product_id != product.id:
+            return None, None, None
+        if trade.seller_id != product.seller_id:
+            return None, None, None
+
+        # 구매자 또는 판매자인지 확인
+        if user.id not in (trade.buyer_id, trade.seller_id):
+            return None, None, None
+
+        # 상태 확인
+        if trade.status != Trade.STATUS_ACCEPTED:
+            return None, None, None
+        if product.status != Product.STATUS_RESERVED:
+            return None, None, None
+
+        return user, trade, product
+
+    except SQLAlchemyError:
+        db.session.rollback()
+        return None, None, None
+
+
+# ---------------------------------------------------------------------------
+# UUID 정규화 헬퍼
+# ---------------------------------------------------------------------------
+
+def _normalize_trade_id(value):
+    """value를 UUID 문자열로 정규화한다.
+
+    유효한 UUID이면 str(uuid.UUID(...))를 반환한다.
+    유효하지 않으면 None을 반환한다.
+    리스트, dict, None, 빈 문자열, 비UUID 형식 값은 모두 거부한다.
+    UUID 파싱 세부 사항은 노출하지 않는다.
+    """
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -785,16 +868,214 @@ def _register_routes(app):
 
         return render_template('report.html')
 
+    # -------------------------------------------------------------------
+    # 채팅 페이지 — GET /trade/<trade_id>/chat
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/chat')
+    @login_required
+    def trade_chat(trade_id):
+        current_user_id = session['user_id']
+
+        # trade_id를 UUID 문자열로 정규화 — 비UUID 값은 거부
+        validated_trade_id = _normalize_trade_id(trade_id)
+        if validated_trade_id is None:
+            flash('채팅에 접근할 수 없거나 현재 이용할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        user, trade, product = _authorize_trade_chat(validated_trade_id, current_user_id)
+        if user is None:
+            flash('채팅에 접근할 수 없거나 현재 이용할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        # 상대방 결정 — 서버에서만 수행
+        if current_user_id == trade.buyer_id:
+            counterpart = trade.seller
+        else:
+            counterpart = trade.buyer
+
+        return render_template(
+            'trade_chat.html',
+            trade=trade,
+            product=product,
+            current_user=user,
+            counterpart=counterpart,
+            trade_id=trade.id,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Socket.IO 이벤트 등록
 # ---------------------------------------------------------------------------
 
-def _register_socketio_events():
-    """Socket.IO 이벤트 핸들러 등록"""
-    import uuid
+# 중복 핸들러 등록 방지: 핸들러는 모듈 수준에서 한 번만 등록한다.
+# create_app()이 여러 번 호출돼도 데코레이터가 중복 실행되지 않도록
+# 등록 여부를 추적하는 플래그를 사용한다.
+_socketio_events_registered = False
 
-    @socketio.on('send_message')
-    def handle_send_message_event(data):
-        data['message_id'] = str(uuid.uuid4())
-        send(data, broadcast=True)
+
+def _register_socketio_events():
+    """보안 거래 채팅 Socket.IO 이벤트 핸들러를 등록한다.
+
+    레거시 비인증 broadcast send_message 핸들러는 제거되었다.
+    """
+    global _socketio_events_registered
+    if _socketio_events_registered:
+        return
+    _socketio_events_registered = True
+
+    _CHAT_ERROR_MSG = '채팅에 접근할 수 없거나 현재 이용할 수 없습니다.'
+
+    # ----------------------------------------------------------------
+    # connect — 인증된 활성 사용자만 연결 허용
+    # ----------------------------------------------------------------
+
+    @socketio.on('connect')
+    def handle_connect(auth=None):
+        """세션에서 user_id를 읽어 사용자 인증 및 활성 상태를 확인한다.
+        auth 파라미터는 수락하되 완전히 무시한다 — 클라이언트 제공 값은 신뢰하지 않는다."""
+        from market.models import User
+
+        user_id = session.get('user_id')
+        if not user_id:
+            return False  # 연결 거부
+
+        try:
+            user = db.session.get(User, user_id)
+        except SQLAlchemyError:
+            db.session.rollback()
+            return False
+
+        if user is None or not user.is_active:
+            return False
+
+        # 연결 수락 — 민감한 정보 emit 없음
+        return True
+
+    # ----------------------------------------------------------------
+    # join_trade_chat — 거래 채팅방 입장
+    # ----------------------------------------------------------------
+
+    @socketio.on('join_trade_chat')
+    def handle_join_trade_chat(data):
+        """클라이언트가 제공한 trade_id를 정수로 변환한 뒤 권한을 검증하고
+        서버에서 생성한 방 이름으로 입장한다. 클라이언트가 제공한 방 이름은
+        절대 사용하지 않는다."""
+        user_id = session.get('user_id')
+
+        if not isinstance(data, dict):
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        raw_trade_id = data.get('trade_id')
+        trade_id = _normalize_trade_id(raw_trade_id)
+        if trade_id is None:
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        user, trade, product = _authorize_trade_chat(trade_id, user_id)
+        if user is None:
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        # 방 이름은 서버에서만 생성 — 클라이언트 입력 사용 금지
+        room = f'trade:{trade.id}'
+        join_room(room)
+
+        # 최소 정보만 요청 소켓에만 전송 (broadcast 없음)
+        emit('chat_joined', {
+            'trade_id': trade.id,
+            'message': '채팅방에 입장했습니다. 메시지는 새로고침 시 사라집니다.',
+        })
+
+    # ----------------------------------------------------------------
+    # send_trade_message — 메시지 전송
+    # ----------------------------------------------------------------
+
+    @socketio.on('send_trade_message')
+    def handle_send_trade_message(data):
+        """메시지마다 권한을 재검증하고, 발신자 정보는 세션과 DB에서만 가져온다.
+        메시지는 DB에 저장하지 않는다."""
+        user_id = session.get('user_id')
+
+        if not isinstance(data, dict):
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        raw_trade_id = data.get('trade_id')
+        trade_id = _normalize_trade_id(raw_trade_id)
+        if trade_id is None:
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        # 메시지 유효성 검사 — 클라이언트 값은 신뢰하지 않음
+        message = data.get('message')
+        if not isinstance(message, str):
+            emit('chat_error', {'message': '올바르지 않은 메시지입니다.'})
+            return
+
+        message = message.strip()
+
+        if not message:
+            emit('chat_error', {'message': '메시지를 입력해 주세요.'})
+            return
+
+        if '\x00' in message:
+            emit('chat_error', {'message': '올바르지 않은 메시지입니다.'})
+            return
+
+        if len(message) > 500:
+            emit('chat_error', {'message': '메시지는 500자 이하여야 합니다.'})
+            return
+
+        # 모든 메시지마다 권한 재검증
+        user, trade, product = _authorize_trade_chat(trade_id, user_id)
+        if user is None:
+            emit('chat_error', {'message': _CHAT_ERROR_MSG})
+            return
+
+        # 방 이름, 발신자 정보, 타임스탬프 모두 서버에서 생성
+        room = f'trade:{trade.id}'
+        sent_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        # 해당 거래 방에만 전송 (broadcast=False, 전체 broadcast 없음)
+        emit(
+            'chat_message',
+            {
+                'trade_id': trade.id,
+                'sender_id': user.id,
+                'sender_username': user.username,
+                'message': message,
+                'sent_at': sent_at,
+            },
+            to=room,
+        )
+
+    # ----------------------------------------------------------------
+    # leave_trade_chat — 채팅방 퇴장
+    # ----------------------------------------------------------------
+
+    @socketio.on('leave_trade_chat')
+    def handle_leave_trade_chat(data):
+        """클라이언트 제공 trade_id를 UUID로 정규화하고 권한을 재검증한 뒤
+        서버에서 방 이름을 생성해 퇴장한다.
+        DB를 수정하지 않는다. 다른 참가자에게 알리지 않는다."""
+        user_id = session.get('user_id')
+
+        if not isinstance(data, dict):
+            return
+
+        raw_trade_id = data.get('trade_id')
+        trade_id = _normalize_trade_id(raw_trade_id)
+        if trade_id is None:
+            return
+
+        # 권한 재검증 — 미인증 또는 상태 불일치 시 조용히 무시
+        user, trade, product = _authorize_trade_chat(trade_id, user_id)
+        if user is None:
+            return
+
+        # 방 이름은 검증된 trade.id를 사용 — 클라이언트 입력 사용 금지
+        room = f'trade:{trade.id}'
+        leave_room(room)
+        # 다른 참가자에게 퇴장 사실을 알리지 않음

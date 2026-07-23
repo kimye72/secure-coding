@@ -27,6 +27,7 @@
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
             <button type="submit" onclick="return confirm('수락한 거래를 취소하시겠습니까?');">취소</button>
           </form>
+          <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
         {% endif %}
         {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
       </li>
@@ -58,6 +59,7 @@
           <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
             <button type="submit" onclick="return confirm('수락된 거래를 취소하시겠습니까?');">취소</button>
           </form>
+          <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
         {% endif %}
         {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
       </li>
