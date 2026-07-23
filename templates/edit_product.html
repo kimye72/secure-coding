@@ -19,6 +19,9 @@
   <label for="price">가격 (원)</label>
   <input type="number" id="price" name="price" min="1" value="{{ product.price }}" required>
 
+  <label for="trade_location">거래 지역 (선택)</label>
+  <input type="text" id="trade_location" name="trade_location" maxlength="120" value="{{ product.trade_location or '' }}" placeholder="예: 대구 수성구">
+
   <label for="status">상태</label>
   <select id="status" name="status">
     <option value="SELLING" {% if product.status == 'SELLING' %}selected{% endif %}>SELLING</option>

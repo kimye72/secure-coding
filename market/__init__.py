@@ -3,6 +3,7 @@ import os
 import re
 import uuid
 import functools
+import unicodedata
 
 from datetime import datetime, timezone
 
@@ -224,6 +225,44 @@ def _validate_product_fields(form):
         return None, None, None, '가격은 0보다 커야 합니다.'
 
     return title, description, price, None
+
+
+def _normalize_trade_location(value):
+    """사용자가 입력한 거래 지역을 검증하고 정규화한다.
+
+    빈 값은 None으로 저장한다. GPS 좌표, IP 기반 위치, 자동 추론값은
+    사용하지 않으며 폼의 단일 텍스트 필드만 처리한다.
+    """
+    location = (value or '').strip()
+    if not location:
+        return None, None
+
+    if len(location) > 120:
+        return None, '거래 지역은 120자 이하로 입력해 주세요.'
+
+    for char in location:
+        if unicodedata.category(char).startswith('C'):
+            return None, '거래 지역을 올바르게 입력해 주세요.'
+
+    return location, None
+
+
+def _normalize_location_filter(value):
+    """대시보드 위치 필터를 안전하게 정규화한다. 부적절한 값은 무시한다."""
+    location, error = _normalize_trade_location(value)
+    if error:
+        return ''
+    return location or ''
+
+
+def _like_contains_pattern(value):
+    escaped = (
+        value
+        .replace('\\', '\\\\')
+        .replace('%', '\\%')
+        .replace('_', '\\_')
+    )
+    return f'%{escaped}%'
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +495,7 @@ def _register_routes(app):
         # ── 검색어 처리 ────────────────────────────────────────────────
         query_raw = (request.args.get('q') or '').strip()
         query = query_raw[:100]  # 최대 100자로 제한
+        location_query = _normalize_location_filter(request.args.get('location'))
 
         # ── 상태 필터 처리 ─────────────────────────────────────────────
         status_param = (request.args.get('status') or '').strip().upper()
@@ -477,6 +517,9 @@ def _register_routes(app):
         if selected_status:
             q = q.filter(Product.status == selected_status)
 
+        if location_query:
+            q = q.filter(Product.trade_location.ilike(_like_contains_pattern(location_query), escape='\\'))
+
         products = q.order_by(Product.created_at.desc()).all()
         product_image_ids = {
             product.id
@@ -490,6 +533,7 @@ def _register_routes(app):
             products=products,
             product_image_ids=product_image_ids,
             query=query,
+            location_query=location_query,
             selected_status=selected_status,
             product_statuses=list(_VALID_STATUSES),
         )
@@ -557,6 +601,10 @@ def _register_routes(app):
             if error:
                 flash(error)
                 return redirect(url_for('new_product'))
+            trade_location, location_error = _normalize_trade_location(request.form.get('trade_location'))
+            if location_error:
+                flash(location_error)
+                return redirect(url_for('new_product'))
 
             image_file = request.files.get('image')
             staged_image = None
@@ -567,6 +615,7 @@ def _register_routes(app):
                     title=title,
                     description=description,
                     price=price,
+                    trade_location=trade_location,
                     seller_id=session['user_id'],          # 항상 세션에서 설정
                     status=Product.STATUS_SELLING,          # 초기 상태는 항상 SELLING
                 )
@@ -704,6 +753,10 @@ def _register_routes(app):
             if error:
                 flash(error)
                 return redirect(url_for('edit_product', product_id=product_id))
+            trade_location, location_error = _normalize_trade_location(request.form.get('trade_location'))
+            if location_error:
+                flash(location_error)
+                return redirect(url_for('edit_product', product_id=product_id))
 
             # ── 상태 유효성 검사 ─────────────────────────────────────────
             status = (request.form.get('status') or '').strip().upper()
@@ -754,6 +807,7 @@ def _register_routes(app):
                 product.title = title
                 product.description = description
                 product.price = price
+                product.trade_location = trade_location
                 product.status = status
 
                 db.session.commit()

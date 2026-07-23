@@ -7,6 +7,8 @@
 <form method="get" action="{{ url_for('dashboard') }}" style="margin-bottom:20px;">
   <input type="text" name="q" value="{{ query }}" placeholder="상품 제목 또는 설명 검색" maxlength="100"
     style="width:50%;display:inline-block;margin-bottom:0;">
+  <input type="text" name="location" value="{{ location_query }}" placeholder="거래 지역 검색" maxlength="120"
+    style="width:25%;display:inline-block;margin-bottom:0;margin-left:8px;">
   <select name="status" style="width:auto;display:inline-block;margin-bottom:0;margin-left:8px;">
     <option value="" {% if not selected_status %}selected{% endif %}>전체 상태</option>
     {% for s in product_statuses | sort %}
@@ -30,6 +32,7 @@
     {% endif %}
     <a href="{{ url_for('view_product', product_id=product.id) }}">{{ product.title }}</a>
     - 가격: {{ product.price }}원
+    - 거래 지역: {{ product.trade_location or '위치 미등록' }}
     - 상태: {{ product.status }}
   </li>
   {% endfor %}

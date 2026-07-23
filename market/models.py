@@ -76,6 +76,7 @@ class Product(db.Model):
     title = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text, nullable=False)
     price = db.Column(db.Integer, nullable=False)
+    trade_location = db.Column(db.String(120), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='SELLING')
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(

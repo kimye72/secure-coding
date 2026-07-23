@@ -9,6 +9,7 @@
 {% endif %}
 <p>{{ product.description }}</p>
 <p>가격: {{ product.price }}원</p>
+<p>거래 지역: {{ product.trade_location or '위치 미등록' }}</p>
 <p>상태: {{ product.status }}</p>
 <p>판매자: {{ seller.username if seller else '알 수 없음' }}</p>
 
