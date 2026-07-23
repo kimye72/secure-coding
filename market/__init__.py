@@ -37,6 +37,9 @@ def create_app(test_config=None):
     if test_config is not None:
         app.config.update(test_config)
 
+    if not app.config.get('SECRET_KEY'):
+        raise RuntimeError('SECRET_KEY 환경변수가 설정되지 않았습니다.')
+
     # 3. SQLAlchemy 초기화 (db.create_all()은 여기서 호출하지 않음)
     db.init_app(app)
 

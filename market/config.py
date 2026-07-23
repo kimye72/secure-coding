@@ -6,7 +6,7 @@ DEFAULT_DATABASE_PATH = PROJECT_ROOT / "market.db"
 
 
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'secret!')
+    SECRET_KEY = os.environ.get('SECRET_KEY')
 
     # --- SQLAlchemy 설정 ---
     SQLALCHEMY_DATABASE_URI = os.environ.get(
@@ -18,3 +18,7 @@ class Config:
     # --- 세션 쿠키 보안 설정 ---
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = (
+        os.environ.get('SESSION_COOKIE_SECURE', 'false').strip().lower()
+        in {'1', 'true', 'yes', 'on'}
+    )

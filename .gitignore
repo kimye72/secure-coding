@@ -1,3 +1,10 @@
+.env
+.env.*
+!.env.example
+market.db
 *.db
+__pycache__/
+*.py[cod]
+.pytest_cache/
+step*.diff
 *.pptx
-__pycache__

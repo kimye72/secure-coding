@@ -27,3 +27,22 @@ if you want to test on external machine, you can utilize the ngrok to forwarding
 sudo snap install ngrok
 ngrok http 5000
 ```
+
+## Configuration
+
+- `SECRET_KEY` is required.
+- how to generate a random local value using:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+- an example of setting it temporarily in WSL:
+
+```bash
+export SECRET_KEY='generated-value'
+```
+
+- `SESSION_COOKIE_SECURE=false` for local HTTP
+- `SESSION_COOKIE_SECURE=true` for an HTTPS production deployment
+- never commit `.env` or real secrets
