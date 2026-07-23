@@ -15,6 +15,21 @@
   <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}">
     <button type="submit" onclick="return confirm('정말로 이 상품을 삭제하시겠습니까?');">상품 삭제</button>
   </form>
+{% elif current_user_id %}
+  {# 로그인한 비판매자 사용자 전용 거래 컨트롤 #}
+  {% if active_trade %}
+    {# 이미 활성 요청이 존재하는 경우 상태 안내 메시지 표시 #}
+    <p>이 상품에 대해 이미 거래 요청을 보냈습니다. (현재 상태: {{ active_trade.status }})</p>
+    <p><a href="{{ url_for('trades') }}">내 거래 내역 보기</a></p>
+  {% elif can_request_trade %}
+    {# 거래 요청 가능한 경우 POST 폼 표시 — buyer_id, seller_id, status 숨김 필드 없음 #}
+    <form method="post" action="{{ url_for('trade_request', product_id=product.id) }}">
+      <button type="submit">거래 요청하기</button>
+    </form>
+  {% else %}
+    {# 상품이 RESERVED 또는 SOLD 상태 #}
+    <p>현재 거래 요청을 할 수 없는 상품입니다.</p>
+  {% endif %}
 {% endif %}
 
 <p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>

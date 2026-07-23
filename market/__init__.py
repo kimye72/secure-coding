@@ -352,16 +352,38 @@ def _register_routes(app):
         seller = product.seller
 
         # 소유권은 서버에서 결정 — 클라이언트 입력에 의존하지 않음
+        current_user_id = session.get('user_id')
         is_owner = (
-            session.get('user_id') is not None
-            and session['user_id'] == product.seller_id
+            current_user_id is not None
+            and current_user_id == product.seller_id
         )
+
+        # 현재 로그인한 구매자의 활성 거래 요청 조회 (판매자 자신은 제외)
+        active_trade = None
+        can_request_trade = False
+        if current_user_id and not is_owner:
+            active_trade = (
+                Trade.query
+                .filter(
+                    Trade.product_id == product.id,
+                    Trade.buyer_id == current_user_id,
+                    Trade.status.in_([Trade.STATUS_PENDING, Trade.STATUS_ACCEPTED]),
+                )
+                .first()
+            )
+            can_request_trade = (
+                product.status == Product.STATUS_SELLING
+                and active_trade is None
+            )
 
         return render_template(
             'view_product.html',
             product=product,
             seller=seller,
             is_owner=is_owner,
+            current_user_id=current_user_id,
+            active_trade=active_trade,
+            can_request_trade=can_request_trade,
         )
 
     # -------------------------------------------------------------------
@@ -390,6 +412,25 @@ def _register_routes(app):
             if status not in _VALID_STATUSES:
                 flash('올바르지 않은 상품 상태입니다.')
                 return redirect(url_for('edit_product', product_id=product_id))
+
+            accepted_trade = Trade.query.filter(
+                Trade.product_id == product.id,
+                Trade.status == Trade.STATUS_ACCEPTED
+            ).first()
+
+            if accepted_trade:
+                if status == Product.STATUS_SELLING or (product.status == Product.STATUS_SOLD and status != Product.STATUS_SOLD):
+                    flash('수락된 거래가 있는 상품은 거래를 취소하지 않고 판매 중으로 변경할 수 없습니다.')
+                    return redirect(url_for('edit_product', product_id=product_id))
+            else:
+                pending_trade = Trade.query.filter(
+                    Trade.product_id == product.id,
+                    Trade.status == Trade.STATUS_PENDING
+                ).first()
+                if pending_trade:
+                    if status != Product.STATUS_SELLING:
+                        flash('대기 중인 거래 요청이 있는 상품의 상태는 직접 변경할 수 없습니다.')
+                        return redirect(url_for('edit_product', product_id=product_id))
 
             # ── 안전한 필드만 업데이트 (seller_id 절대 변경하지 않음) ──
             product.title = title
@@ -437,6 +478,261 @@ def _register_routes(app):
             flash('상품 삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
 
         return redirect(url_for('dashboard'))
+
+    # -------------------------------------------------------------------
+    # 거래 요청 생성 — POST /product/<product_id>/trade/request
+    # -------------------------------------------------------------------
+
+    @app.route('/product/<product_id>/trade/request', methods=['POST'])
+    @login_required
+    def trade_request(product_id):
+        current_user_id = session['user_id']
+        product = db.session.get(Product, product_id)
+
+        # 상품 미존재, 자기 상품, 판매 중이 아닌 상품, 중복 요청을 모두 제네릭 메시지로 처리
+        _TRADE_REQ_ERROR = '거래 요청을 처리할 수 없습니다.'
+
+        if product is None:
+            flash(_TRADE_REQ_ERROR)
+            return redirect(url_for('dashboard'))
+
+        # 자기 자신 상품에 요청 불가
+        if product.seller_id == current_user_id:
+            flash(_TRADE_REQ_ERROR)
+            return redirect(url_for('view_product', product_id=product_id))
+
+        # 판매 중인 상품만 요청 가능
+        if product.status != Product.STATUS_SELLING:
+            flash(_TRADE_REQ_ERROR)
+            return redirect(url_for('view_product', product_id=product_id))
+
+        # 동일 상품에 대해 이미 PENDING 또는 ACCEPTED 요청이 있으면 거부
+        existing = (
+            Trade.query
+            .filter(
+                Trade.product_id == product.id,
+                Trade.buyer_id == current_user_id,
+                Trade.status.in_([Trade.STATUS_PENDING, Trade.STATUS_ACCEPTED]),
+            )
+            .first()
+        )
+        if existing is not None:
+            flash(_TRADE_REQ_ERROR)
+            return redirect(url_for('view_product', product_id=product_id))
+
+        # 모든 검증 통과 — buyer_id/seller_id는 세션과 ORM에서만 설정
+        new_trade = Trade(
+            product_id=product.id,
+            buyer_id=current_user_id,       # 폼에서 읽지 않음
+            seller_id=product.seller_id,    # 폼에서 읽지 않음
+            status=Trade.STATUS_PENDING,
+        )
+        try:
+            db.session.add(new_trade)
+            db.session.commit()
+            flash('거래 요청이 전송되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('거래 요청 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('view_product', product_id=product_id))
+
+    # -------------------------------------------------------------------
+    # 거래 내역 — GET /trades
+    # -------------------------------------------------------------------
+
+    @app.route('/trades')
+    @login_required
+    def trades():
+        current_user_id = session['user_id']
+
+        # 발신 거래 (현재 사용자가 구매자인 거래), 최신순
+        outgoing_trades = (
+            Trade.query
+            .filter(Trade.buyer_id == current_user_id)
+            .order_by(Trade.created_at.desc())
+            .all()
+        )
+
+        # 수신 거래 (현재 사용자가 판매자인 거래), 최신순
+        incoming_trades = (
+            Trade.query
+            .filter(Trade.seller_id == current_user_id)
+            .order_by(Trade.created_at.desc())
+            .all()
+        )
+
+        return render_template(
+            'trades.html',
+            outgoing_trades=outgoing_trades,
+            incoming_trades=incoming_trades,
+            current_user_id=current_user_id,
+        )
+
+    # -------------------------------------------------------------------
+    # 거래 수락 — POST /trade/<trade_id>/accept
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/accept', methods=['POST'])
+    @login_required
+    def trade_accept(trade_id):
+        current_user_id = session['user_id']
+        trade = db.session.get(Trade, trade_id)
+
+        _TRADE_AUTH_ERROR = '거래를 처리할 수 없습니다.'
+
+        # 거래 미존재 또는 현재 사용자가 판매자가 아닌 경우
+        if trade is None or trade.seller_id != current_user_id:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 거래 상태가 PENDING이어야 함
+        if trade.status != Trade.STATUS_PENDING:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 상품 존재 및 소유권 재확인
+        product = db.session.get(Product, trade.product_id)
+        if product is None or product.seller_id != current_user_id:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 상품이 아직 판매 중이어야 함
+        if product.status != Product.STATUS_SELLING:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 다른 수락된 거래가 있는지 확인
+        existing_accepted = Trade.query.filter(
+            Trade.product_id == product.id,
+            Trade.status == Trade.STATUS_ACCEPTED,
+            Trade.id != trade.id
+        ).first()
+
+        if existing_accepted is not None:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        try:
+            # 1. 선택된 거래 수락
+            trade.status = Trade.STATUS_ACCEPTED
+            # 2. 상품 상태를 예약으로 변경
+            product.status = Product.STATUS_RESERVED
+            # 3. 동일 상품의 다른 PENDING 거래를 모두 거절
+            competing = (
+                Trade.query
+                .filter(
+                    Trade.product_id == product.id,
+                    Trade.status == Trade.STATUS_PENDING,
+                    Trade.id != trade.id,
+                )
+                .all()
+            )
+            for other in competing:
+                other.status = Trade.STATUS_REJECTED
+            # 한 번만 커밋
+            db.session.commit()
+            flash('거래 요청을 수락했습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('trades'))
+
+    # -------------------------------------------------------------------
+    # 거래 거절 — POST /trade/<trade_id>/reject
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/reject', methods=['POST'])
+    @login_required
+    def trade_reject(trade_id):
+        current_user_id = session['user_id']
+        trade = db.session.get(Trade, trade_id)
+
+        _TRADE_AUTH_ERROR = '거래를 처리할 수 없습니다.'
+
+        # 거래 미존재 또는 현재 사용자가 판매자가 아닌 경우 (구매자의 거절 차단)
+        if trade is None or trade.seller_id != current_user_id:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 거래 상태가 PENDING이어야 함 (REJECTED는 종료 상태)
+        if trade.status != Trade.STATUS_PENDING:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        # 상품 소유권 재확인
+        product = db.session.get(Product, trade.product_id)
+        if product is None or product.seller_id != current_user_id:
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        try:
+            trade.status = Trade.STATUS_REJECTED
+            # 상품 상태는 변경하지 않음
+            db.session.commit()
+            flash('거래 요청을 거절했습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('trades'))
+
+    # -------------------------------------------------------------------
+    # 거래 취소 — POST /trade/<trade_id>/cancel
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/cancel', methods=['POST'])
+    @login_required
+    def trade_cancel(trade_id):
+        current_user_id = session['user_id']
+        trade = db.session.get(Trade, trade_id)
+
+        _TRADE_AUTH_ERROR = '거래를 처리할 수 없습니다.'
+
+        # 거래 미존재 또는 무관한 사용자
+        if trade is None or (
+            trade.buyer_id != current_user_id
+            and trade.seller_id != current_user_id
+        ):
+            flash(_TRADE_AUTH_ERROR)
+            return redirect(url_for('trades'))
+
+        product = db.session.get(Product, trade.product_id)
+
+        if trade.status == Trade.STATUS_PENDING:
+            # PENDING 취소: 구매자만 가능
+            if trade.buyer_id != current_user_id:
+                flash(_TRADE_AUTH_ERROR)
+                return redirect(url_for('trades'))
+            try:
+                trade.status = Trade.STATUS_CANCELLED
+                # 상품 상태 변경 없음
+                db.session.commit()
+                flash('거래 요청이 취소되었습니다.')
+            except SQLAlchemyError:
+                db.session.rollback()
+                flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        elif trade.status == Trade.STATUS_ACCEPTED:
+            # ACCEPTED 취소: 구매자 또는 판매자 모두 가능, 상품이 RESERVED 상태여야 함
+            if product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
+                flash(_TRADE_AUTH_ERROR)
+                return redirect(url_for('trades'))
+            try:
+                trade.status = Trade.STATUS_CANCELLED
+                product.status = Product.STATUS_SELLING  # 상품 상태 복구
+                db.session.commit()
+                flash('거래가 취소되었습니다. 상품이 다시 판매 중 상태로 변경되었습니다.')
+            except SQLAlchemyError:
+                db.session.rollback()
+                flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        else:
+            # REJECTED 또는 CANCELLED — 취소 불가
+            flash(_TRADE_AUTH_ERROR)
+
+        return redirect(url_for('trades'))
 
     # -------------------------------------------------------------------
     # 신고

@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}내 거래 내역{% endblock %}
+{% block content %}
+<h2>내 거래 내역</h2>
+
+{# ── 수신 거래 (판매자로서 받은 요청) ──────────────────────────── #}
+<h3>수신 거래 요청 (판매자)</h3>
+{% if incoming_trades %}
+  <ul>
+    {% for trade in incoming_trades %}
+      <li>
+        <strong><a href="{{ url_for('view_product', product_id=trade.product.id) }}">{{ trade.product.title }}</a></strong>
+        — 구매 요청자: {{ trade.buyer.username if trade.buyer else '알 수 없음' }}
+        / 상태: {{ trade.status }}
+        / 요청일: {{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}
+
+        {# 판매자 전용 액션 — 서버에서 seller_id == current_user_id 검증됨 #}
+        {% if trade.status == 'PENDING' %}
+          <form method="post" action="{{ url_for('trade_accept', trade_id=trade.id) }}" style="display:inline;">
+            <button type="submit">수락</button>
+          </form>
+          <form method="post" action="{{ url_for('trade_reject', trade_id=trade.id) }}" style="display:inline;">
+            <button type="submit" onclick="return confirm('이 거래 요청을 거절하시겠습니까?');">거절</button>
+          </form>
+        {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
+          {# 수락된 거래는 판매자도 취소 가능 (상품이 RESERVED인 동안) #}
+          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <button type="submit" onclick="return confirm('수락한 거래를 취소하시겠습니까?');">취소</button>
+          </form>
+        {% endif %}
+        {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>수신된 거래 요청이 없습니다.</p>
+{% endif %}
+
+{# ── 발신 거래 (구매자로서 보낸 요청) ──────────────────────────── #}
+<h3>발신 거래 요청 (구매자)</h3>
+{% if outgoing_trades %}
+  <ul>
+    {% for trade in outgoing_trades %}
+      <li>
+        <strong><a href="{{ url_for('view_product', product_id=trade.product.id) }}">{{ trade.product.title }}</a></strong>
+        — 판매자: {{ trade.seller.username if trade.seller else '알 수 없음' }}
+        / 상태: {{ trade.status }}
+        / 요청일: {{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}
+
+        {# 구매자 전용 액션 #}
+        {% if trade.status == 'PENDING' %}
+          {# PENDING 취소: 구매자만 가능 #}
+          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <button type="submit" onclick="return confirm('거래 요청을 취소하시겠습니까?');">취소</button>
+          </form>
+        {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
+          {# ACCEPTED 취소: 상품이 RESERVED인 동안 구매자도 취소 가능 #}
+          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+            <button type="submit" onclick="return confirm('수락된 거래를 취소하시겠습니까?');">취소</button>
+          </form>
+        {% endif %}
+        {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>발신한 거래 요청이 없습니다.</p>
+{% endif %}
+
+<p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
+{% endblock %}
