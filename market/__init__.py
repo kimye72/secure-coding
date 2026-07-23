@@ -314,6 +314,7 @@ def _register_routes(app):
 
     trade_state_action_limit = limiter.shared_limit('30 per hour', scope='trade-state-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
+    admin_user_action_limit = limiter.shared_limit('30 per hour', scope='admin-user-actions', key_func=_rate_limit_identity, methods=['POST'])
 
     # 허용된 상품 상태 집합
     _VALID_STATUSES = {Product.STATUS_SELLING, Product.STATUS_RESERVED, Product.STATUS_SOLD}
@@ -991,6 +992,88 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     admin_required = _get_admin_required(app)
+
+    # -------------------------------------------------------------------
+    # 관리자 - 사용자 관리
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/users')
+    @admin_required
+    def admin_users():
+        users = User.query.order_by(User.username.asc(), User.id.asc()).all()
+        return render_template('admin_users.html', users=users)
+
+    # -------------------------------------------------------------------
+    # 관리자 - 사용자 BAN
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/user/<user_id>/ban', methods=['POST'])
+    @admin_user_action_limit
+    @admin_required
+    def admin_user_ban(user_id):
+        try:
+            target_user_id = str(uuid.UUID(str(user_id)))
+        except (ValueError, TypeError, AttributeError):
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        target = db.session.get(User, target_user_id)
+        if target is None:
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        if target.id == session['user_id'] or target.role != User.ROLE_USER:
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        try:
+            if target.is_active:
+                target.is_active = False
+                db.session.commit()
+                flash('사용자가 BAN 처리되었습니다.')
+            else:
+                flash('사용자가 이미 BAN 상태입니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('사용자 상태 변경 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('admin_users'))
+
+    # -------------------------------------------------------------------
+    # 관리자 - 사용자 BAN 해제
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/user/<user_id>/unban', methods=['POST'])
+    @admin_user_action_limit
+    @admin_required
+    def admin_user_unban(user_id):
+        try:
+            target_user_id = str(uuid.UUID(str(user_id)))
+        except (ValueError, TypeError, AttributeError):
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        target = db.session.get(User, target_user_id)
+        if target is None:
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        if target.role != User.ROLE_USER:
+            flash('사용자 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        try:
+            if not target.is_active:
+                target.is_active = True
+                db.session.commit()
+                flash('사용자 BAN이 해제되었습니다.')
+            else:
+                flash('사용자가 이미 활성 상태입니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('사용자 상태 변경 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('admin_users'))
 
     @app.route('/admin/reports')
     @admin_required
