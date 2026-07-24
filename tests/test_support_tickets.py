@@ -367,7 +367,7 @@ def test_rendered_support_content_is_escaped_and_line_breaks_are_preserved(clien
     assert '&lt;i&gt;답변&lt;/i&gt;' in body
     assert '<script>제목</script>' not in body
     assert '<b>첫 줄</b>' not in body
-    assert 'white-space: pre-wrap' in body
+    assert 'class="prewrap"' in body
     assert '두 번째 줄' in body
 
 

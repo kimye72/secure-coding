@@ -2,140 +2,67 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}My Market{% endblock %}</title>
-  <!-- Socket.IO 클라이언트 라이브러리 -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <!-- Socket.IO 클라이언트 라이브러리: 기존 거래 채팅 동작 유지 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-  <style>
-    /* Notion 스타일 미니멀 디자인 */
-    body {
-      background-color: #F7F7F7;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      margin: 0;
-      padding: 0;
-      color: #333;
-    }
-    nav {
-      background-color: #fff;
-      padding: 20px;
-      border-bottom: 1px solid #e0e0e0;
-    }
-    nav a {
-      text-decoration: none;
-      color: #555;
-      margin-right: 15px;
-      font-weight: 500;
-    }
-    .container {
-      max-width: 800px;
-      margin: 40px auto;
-      background-color: #fff;
-      padding: 40px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-      border-radius: 8px;
-    }
-    h1, h2, h3 {
-      font-weight: 600;
-      margin-bottom: 20px;
-    }
-    input, textarea, button {
-      width: 100%;
-      padding: 10px;
-      margin-bottom: 20px;
-      border: 1px solid #e0e0e0;
-      border-radius: 4px;
-      font-size: 16px;
-    }
-    button {
-      background-color: #007AFF;
-      color: #fff;
-      border: none;
-      cursor: pointer;
-      transition: background-color 0.2s;
-    }
-    button:hover {
-      background-color: #005BB5;
-    }
-    ul {
-      list-style: none;
-      padding: 0;
-    }
-    li {
-      padding: 10px;
-      border-bottom: 1px solid #e0e0e0;
-    }
-    .flash {
-      background-color: #FFECB3;
-      padding: 10px;
-      border: 1px solid #FFB74D;
-      border-radius: 4px;
-      margin-bottom: 20px;
-    }
-    /* 채팅 영역 스타일 */
-    #chat {
-      margin-top: 40px;
-    }
-    #messages {
-      height: 200px;
-      overflow-y: auto;
-      border: 1px solid #e0e0e0;
-      padding: 10px;
-      border-radius: 4px;
-      margin-bottom: 10px;
-      background-color: #fafafa;
-    }
-    .nav-form {
-      display: inline;
-      margin: 0;
-      padding: 0;
-    }
-    .logout-btn {
-      background: none;
-      color: #555;
-      border: none;
-      padding: 0;
-      margin-right: 15px;
-      font-weight: 500;
-      font-family: inherit;
-      font-size: inherit;
-      cursor: pointer;
-      width: auto;
-    }
-    .logout-btn:hover {
-      background: none;
-      color: #333;
-    }
-  </style>
+  {% block head_extra %}{% endblock %}
 </head>
 <body>
-  <nav>
-    {% if session.get('user_id') %}
-      <a href="{{ url_for('dashboard') }}">대시보드</a>
-      <a href="{{ url_for('mypage') }}">마이페이지</a>
-      <a href="{{ url_for('wallet') }}">포인트</a>
-      <a href="{{ url_for('notifications_page') }}">알림</a>
-      <a href="{{ url_for('support_list') }}">고객지원</a>
-      <a href="{{ url_for('profile') }}">프로필</a>
-      <a href="{{ url_for('report') }}">신고하기</a>
-      <form action="{{ url_for('logout') }}" method="post" class="nav-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="logout-btn">로그아웃</button>
-      </form>
-    {% else %}
-      <a href="{{ url_for('login') }}">로그인</a>
-      <a href="{{ url_for('register') }}">회원가입</a>
-    {% endif %}
-  </nav>
-  <div class="container">
+  <header class="site-header">
+    <nav class="nav-shell" aria-label="주요 내비게이션">
+      <a class="brand" href="{{ url_for('dashboard') if session.get('user_id') else url_for('main.index') }}">
+        <strong>Tiny Market</strong>
+        <span>안전한 중고거래 실습 플랫폼</span>
+      </a>
+
+      <div class="nav-groups">
+        {% if session.get('user_id') %}
+          <div class="nav-group" aria-label="사용자 메뉴">
+            <a class="nav-link" href="{{ url_for('dashboard') }}">대시보드</a>
+            <a class="nav-link" href="{{ url_for('mypage') }}">마이페이지</a>
+            <a class="nav-link" href="{{ url_for('wallet') }}">포인트</a>
+            <a class="nav-link" href="{{ url_for('notifications_page') }}">알림</a>
+            <a class="nav-link" href="{{ url_for('support_list') }}">고객지원</a>
+            <a class="nav-link" href="{{ url_for('profile') }}">프로필</a>
+            <a class="nav-link" href="{{ url_for('report') }}">신고하기</a>
+          </div>
+          <div class="nav-group" aria-label="세션 메뉴">
+            <form action="{{ url_for('logout') }}" method="post" class="nav-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="logout-btn">로그아웃</button>
+            </form>
+          </div>
+        {% else %}
+          <div class="nav-group" aria-label="인증 메뉴">
+            <a class="nav-link" href="{{ url_for('login') }}">로그인</a>
+            <a class="nav-link" href="{{ url_for('register') }}">회원가입</a>
+          </div>
+        {% endif %}
+      </div>
+    </nav>
+  </header>
+
+  <main class="page-shell">
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <ul>
+        <ul class="flash-list" aria-live="polite">
           {% for message in messages %}
             <li class="flash">{{ message }}</li>
           {% endfor %}
         </ul>
       {% endif %}
     {% endwith %}
+
     {% block content %}{% endblock %}
-  </div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <p>Tiny Market · 내부 포인트만 사용하는 보안 코딩 실습 서비스입니다.</p>
+    </div>
+  </footer>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

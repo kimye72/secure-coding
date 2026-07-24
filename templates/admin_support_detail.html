@@ -1,35 +1,40 @@
 {% extends "base.html" %}
 {% block title %}관리자 - 문의 상세{% endblock %}
 {% block content %}
-<h2>문의 상세 (관리자)</h2>
+<section class="admin-panel">
+  <h2>문의 상세 (관리자)</h2>
+  <ul class="detail-list">
+    <li><strong>작성자</strong><span>{{ ticket.user.username if ticket.user else '알 수 없음' }}</span></li>
+    <li><strong>카테고리</strong><span class="badge">{{ ticket.category }}</span></li>
+    <li><strong>제목</strong><span>{{ ticket.title }}</span></li>
+    <li><strong>상태</strong><span class="badge badge-{{ ticket.status|lower|replace('_', '-') }}">{{ ticket.status }}</span></li>
+    <li><strong>작성일</strong><span>{{ ticket.created_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+    <li><strong>수정일</strong><span>{{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+  </ul>
+</section>
 
-<ul>
-  <li><strong>작성자:</strong> {{ ticket.user.username if ticket.user else '알 수 없음' }}</li>
-  <li><strong>카테고리:</strong> {{ ticket.category }}</li>
-  <li><strong>제목:</strong> {{ ticket.title }}</li>
-  <li><strong>상태:</strong> {{ ticket.status }}</li>
-  <li><strong>작성일:</strong> {{ ticket.created_at.strftime('%Y-%m-%d %H:%M') }}</li>
-  <li><strong>수정일:</strong> {{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') }}</li>
-</ul>
+<section class="surface">
+  <h3>문의 내용</h3>
+  <p class="prewrap">{{ ticket.content }}</p>
 
-<h3>문의 내용</h3>
-<p style="white-space: pre-wrap;">{{ ticket.content }}</p>
-
-<h3>상태 및 답변 업데이트</h3>
-<form method="post" action="{{ url_for('admin_support_update', ticket_id=ticket.id) }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label for="status">상태</label>
-  <select id="status" name="status" required>
-    {% for status in statuses %}
-    <option value="{{ status }}" {% if ticket.status == status %}selected{% endif %}>{{ status }}</option>
-    {% endfor %}
-  </select>
-
-  <label for="admin_response">관리자 답변</label>
-  <textarea id="admin_response" name="admin_response" rows="8" maxlength="2000">{{ ticket.admin_response or '' }}</textarea>
-
-  <button type="submit">업데이트</button>
-</form>
+  <h3>상태 및 답변 업데이트</h3>
+  <form method="post" action="{{ url_for('admin_support_update', ticket_id=ticket.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label for="status">상태</label>
+      <select id="status" name="status" required>
+        {% for status in statuses %}
+        <option value="{{ status }}" {% if ticket.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="admin_response">관리자 답변</label>
+      <textarea id="admin_response" name="admin_response" rows="8" maxlength="2000">{{ ticket.admin_response or '' }}</textarea>
+    </div>
+    <button type="submit">업데이트</button>
+  </form>
+</section>
 
 <p><a href="{{ url_for('admin_support_list') }}">문의 목록으로 돌아가기</a></p>
 {% endblock %}

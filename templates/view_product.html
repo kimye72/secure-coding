@@ -1,68 +1,80 @@
 {% extends "base.html" %}
 {% block title %}상품 상세보기{% endblock %}
 {% block content %}
-<h2>{{ product.title }}</h2>
-{% if product_has_image %}
-<img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:360px;height:auto;">
-{% else %}
-<p>대표 이미지가 없습니다.</p>
-{% endif %}
-<p>{{ product.description }}</p>
-<p>가격: {{ product.price }}원</p>
-<p>거래 지역: {{ product.trade_location or '위치 미등록' }}</p>
-<p>상태: {{ product.status }}</p>
-<p>
-  판매자:
-  {% if seller %}
-  {{ seller.username }} (<a href="{{ url_for('user_reviews', user_id=seller.id) }}">판매자 리뷰 보기</a>)
-  {% else %}
-  알 수 없음
-  {% endif %}
-</p>
+<section class="grid grid-two">
+  <div class="surface">
+    {% if product_has_image %}
+    <div class="product-detail-media">
+      <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지">
+    </div>
+    {% else %}
+    <div class="product-detail-media"><span>대표 이미지가 없습니다.</span></div>
+    {% endif %}
+  </div>
 
-{% if is_owner %}
-  {# 판매자 전용 관리 컨트롤 — 서버에서 소유권 확인 후 렌더링 #}
-  <p>
-    <a href="{{ url_for('edit_product', product_id=product.id) }}">상품 수정</a>
-  </p>
-  <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" onclick="return confirm('정말로 이 상품을 삭제하시겠습니까?');">상품 삭제</button>
-  </form>
-{% elif current_user_id %}
-  {# 로그인한 비판매자 사용자 전용 거래 컨트롤 #}
-  {% if active_trade %}
-    {# 이미 활성 요청이 존재하는 경우 상태 안내 메시지 표시 #}
-    <p>이 상품에 대해 이미 거래 요청을 보냈습니다. (현재 상태: {{ active_trade.status }})</p>
-    <p><a href="{{ url_for('trades') }}">내 거래 내역 보기</a></p>
-  {% elif can_request_trade %}
-    {# 거래 요청 가능한 경우 POST 폼 표시 — buyer_id, seller_id, status 숨김 필드 없음 #}
-    <form method="post" action="{{ url_for('trade_request', product_id=product.id) }}">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit">거래 요청하기</button>
-    </form>
-  {% else %}
-    {# 상품이 RESERVED 또는 SOLD 상태 #}
-    <p>현재 거래 요청을 할 수 없는 상품입니다.</p>
-  {% endif %}
-  <p><a href="{{ url_for('report', target_type='PRODUCT', target_id=product.id) }}">상품 신고</a></p>
-{% endif %}
+  <article class="surface">
+    <h2>{{ product.title }}</h2>
+    <p class="prewrap">{{ product.description }}</p>
+    <p class="price">가격: {{ product.price }}원</p>
+    <ul class="detail-list">
+      <li><strong>거래 지역: {{ product.trade_location or '위치 미등록' }}</strong></li>
+      <li><strong>상태</strong><span class="badge badge-{{ product.status|lower }}">{{ product.status }}</span></li>
+      <li>
+        <strong>판매자</strong>
+        <span>
+          {% if seller %}
+          {{ seller.username }} (<a href="{{ url_for('user_reviews', user_id=seller.id) }}">판매자 리뷰 보기</a>)
+          {% else %}
+          알 수 없음
+          {% endif %}
+        </span>
+      </li>
+    </ul>
 
-<h3>상품 리뷰</h3>
-{% if product_reviews %}
-<p>평균 평점: {{ "%.1f"|format(product_average_rating) }} / 5</p>
-<ul>
-  {% for review in product_reviews %}
-  <li>
-    <p><strong>{{ review.rating }} / 5</strong> — 작성자: {{ review.reviewer.username if review.reviewer else '알 수 없음' }}</p>
-    <p>{{ review.content or '작성된 코멘트가 없습니다.' }}</p>
-    <p>작성일: {{ review.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p>아직 등록된 리뷰가 없습니다.</p>
-{% endif %}
+    {% if is_owner %}
+    <div class="actions">
+      <a class="button button-secondary" href="{{ url_for('edit_product', product_id=product.id) }}">상품 수정</a>
+    </div>
+    <div class="danger-zone">
+      <form method="post" action="{{ url_for('delete_product', product_id=product.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="button-danger">상품 삭제</button>
+      </form>
+    </div>
+    {% elif current_user_id %}
+      {% if active_trade %}
+      <p>이 상품에 대해 이미 거래 요청을 보냈습니다. (현재 상태: {{ active_trade.status }})</p>
+      <p><a href="{{ url_for('trades') }}">내 거래 내역 보기</a></p>
+      {% elif can_request_trade %}
+      <form method="post" action="{{ url_for('trade_request', product_id=product.id) }}" class="form-actions">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">거래 요청하기</button>
+      </form>
+      {% else %}
+      <p class="muted">현재 거래 요청을 할 수 없는 상품입니다.</p>
+      {% endif %}
+      <p><a href="{{ url_for('report', target_type='PRODUCT', target_id=product.id) }}">상품 신고</a></p>
+    {% endif %}
+  </article>
+</section>
+
+<section class="surface">
+  <h3>상품 리뷰</h3>
+  {% if product_reviews %}
+  <p>평균 평점: {{ "%.1f"|format(product_average_rating) }} / 5</p>
+  <ul class="list-clean">
+    {% for review in product_reviews %}
+    <li class="list-item">
+      <p><strong>{{ review.rating }} / 5</strong> — 작성자: {{ review.reviewer.username if review.reviewer else '알 수 없음' }}</p>
+      <p class="prewrap">{{ review.content or '작성된 코멘트가 없습니다.' }}</p>
+      <p class="muted">작성일: {{ review.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-state">아직 등록된 리뷰가 없습니다.</p>
+  {% endif %}
+</section>
 
 <p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
 {% endblock %}

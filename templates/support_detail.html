@@ -1,25 +1,30 @@
 {% extends "base.html" %}
 {% block title %}문의 상세{% endblock %}
 {% block content %}
-<h2>문의 상세</h2>
+<section class="page-header">
+  <h2>문의 상세</h2>
+  <p>제출한 문의의 처리 상태와 관리자 답변을 확인합니다.</p>
+</section>
 
-<ul>
-  <li><strong>카테고리:</strong> {{ ticket.category }}</li>
-  <li><strong>제목:</strong> {{ ticket.title }}</li>
-  <li><strong>상태:</strong> {{ ticket.status }}</li>
-  <li><strong>작성일:</strong> {{ ticket.created_at.strftime('%Y-%m-%d %H:%M') }}</li>
-  <li><strong>수정일:</strong> {{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') }}</li>
-</ul>
+<section class="surface">
+  <ul class="detail-list">
+    <li><strong>카테고리</strong><span class="badge">{{ ticket.category }}</span></li>
+    <li><strong>제목</strong><span>{{ ticket.title }}</span></li>
+    <li><strong>상태</strong><span class="badge badge-{{ ticket.status|lower|replace('_', '-') }}">{{ ticket.status }}</span></li>
+    <li><strong>작성일</strong><span>{{ ticket.created_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+    <li><strong>수정일</strong><span>{{ ticket.updated_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+  </ul>
 
-<h3>문의 내용</h3>
-<p style="white-space: pre-wrap;">{{ ticket.content }}</p>
+  <h3>문의 내용</h3>
+  <p class="prewrap">{{ ticket.content }}</p>
 
-<h3>관리자 답변</h3>
-{% if ticket.admin_response %}
-<p style="white-space: pre-wrap;">{{ ticket.admin_response }}</p>
-{% else %}
-<p>답변 대기 중</p>
-{% endif %}
+  <h3>관리자 답변</h3>
+  {% if ticket.admin_response %}
+  <p class="prewrap">{{ ticket.admin_response }}</p>
+  {% else %}
+  <p class="empty-state">답변 대기 중</p>
+  {% endif %}
+</section>
 
 <p><a href="{{ url_for('support_list') }}">문의 목록으로 돌아가기</a></p>
 {% endblock %}

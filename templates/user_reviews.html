@@ -1,27 +1,35 @@
 {% extends "base.html" %}
 {% block title %}사용자 리뷰{% endblock %}
 {% block content %}
-<h2>{{ target_user.username }}님의 거래 리뷰</h2>
+<section class="page-header">
+  <h2>{{ target_user.username }}님의 거래 리뷰</h2>
+  {% if reviews %}
+  <p>평균 평점: {{ "%.1f"|format(average_rating) }} / 5</p>
+  {% else %}
+  <p>아직 받은 리뷰가 없습니다.</p>
+  {% endif %}
+</section>
 
-{% if reviews %}
-<p>평균 평점: {{ "%.1f"|format(average_rating) }} / 5</p>
-<ul>
-  {% for review in reviews %}
-  <li>
-    <p>
-      <strong>{{ review.rating }} / 5</strong>
-      — 상품:
-      <a href="{{ url_for('view_product', product_id=review.product.id) }}">{{ review.product.title }}</a>
-    </p>
-    <p>작성자: {{ review.reviewer.username if review.reviewer else '알 수 없음' }}</p>
-    <p>{{ review.content or '작성된 코멘트가 없습니다.' }}</p>
-    <p>작성일: {{ review.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p>아직 받은 리뷰가 없습니다.</p>
-{% endif %}
+<section class="surface">
+  {% if reviews %}
+  <ul class="list-clean">
+    {% for review in reviews %}
+    <li class="list-item">
+      <p>
+        <strong>{{ review.rating }} / 5</strong>
+        — 상품:
+        <a href="{{ url_for('view_product', product_id=review.product.id) }}">{{ review.product.title }}</a>
+      </p>
+      <p>작성자: {{ review.reviewer.username if review.reviewer else '알 수 없음' }}</p>
+      <p class="prewrap">{{ review.content or '작성된 코멘트가 없습니다.' }}</p>
+      <p class="muted">작성일: {{ review.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-state">아직 받은 리뷰가 없습니다.</p>
+  {% endif %}
+</section>
 
 <p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
 {% endblock %}

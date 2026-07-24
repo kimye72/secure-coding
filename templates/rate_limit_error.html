@@ -1,10 +1,12 @@
 {% extends 'base.html' %}
 {% block title %}요청 제한 - My Market{% endblock %}
 {% block content %}
-<h2>요청 제한</h2>
-<p>요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.</p>
-<p>
-  <a href="{{ url_for('login') }}">로그인 페이지로 돌아가기</a> |
-  <a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a>
-</p>
+<section class="surface">
+  <h2>요청 제한</h2>
+  <p>요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.</p>
+  <div class="actions">
+    <a class="button button-secondary" href="{{ url_for('login') }}">로그인 페이지로 돌아가기</a>
+    <a class="button button-secondary" href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a>
+  </div>
+</section>
 {% endblock %}

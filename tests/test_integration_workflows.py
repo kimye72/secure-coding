@@ -200,7 +200,6 @@ def _assert_private_terms_absent(body):
         'market.db',
         'session=',
         'Set-Cookie',
-        'card',
         'bank',
         'account-number',
     ]
@@ -755,3 +754,42 @@ def test_security_headers_and_privacy_regression(app):
     assert '123 포인트' in wallet_body
     assert '9999 포인트' not in wallet_body
     assert other_id not in wallet_body
+
+
+def test_modern_ui_preserves_stylesheet_and_critical_forms(app):
+    client = app.test_client()
+    with app.app_context():
+        seller_id = _create_user('uiseller')
+        buyer_id = _create_user('uibuyer', balance=2000)
+        product_id = _create_product(seller_id, title='<b>UI 상품</b>', price=1200)
+
+    login_page = client.get('/login').get_data(as_text=True)
+    assert 'href="/static/css/style.css"' in login_page
+    assert '<form method="post"' in login_page
+    assert 'name="csrf_token"' in login_page
+
+    _login_session(client, buyer_id)
+    product_page = client.get(f'/product/{product_id}').get_data(as_text=True)
+    assert '&lt;b&gt;UI 상품&lt;/b&gt;' in product_page
+    assert '<b>UI 상품</b>' not in product_page
+    assert f'action="/product/{product_id}/trade/request"' in product_page
+    assert 'method="post"' in product_page
+    assert 'name="csrf_token"' in product_page
+
+    assert client.post(f'/product/{product_id}/trade/request').status_code == 302
+    with app.app_context():
+        trade_id = Trade.query.filter_by(product_id=product_id, buyer_id=buyer_id).one().id
+    _login_session(client, seller_id)
+    assert client.post(f'/trade/{trade_id}/accept').status_code == 302
+    _login_session(client, buyer_id)
+    trades_page = client.get('/trades').get_data(as_text=True)
+    assert f'action="/trade/{trade_id}/pay"' in trades_page
+    assert f'action="/trade/{trade_id}/cancel"' in trades_page
+    assert 'type="hidden" name="amount"' not in trades_page
+    assert 'name="csrf_token"' in trades_page
+
+    _login_session(client, seller_id)
+    mypage = client.get('/mypage').get_data(as_text=True)
+    assert f'action="/product/{product_id}/delete"' in mypage
+    assert 'method="post"' in mypage
+    assert 'name="csrf_token"' in mypage

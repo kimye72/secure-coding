@@ -1,38 +1,59 @@
 {% extends "base.html" %}
 {% block title %}상품 수정{% endblock %}
 {% block content %}
-<h2>상품 수정</h2>
-{% if product_has_image %}
-<img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:240px;height:auto;">
-{% else %}
-<p>대표 이미지가 없습니다.</p>
-{% endif %}
+<section class="page-header">
+  <h2>상품 수정</h2>
+  <p>상품 정보와 대표 이미지를 변경할 수 있습니다.</p>
+</section>
 
-<form method="post" action="{{ url_for('edit_product', product_id=product.id) }}" enctype="multipart/form-data">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <label for="title">제목</label>
-  <input type="text" id="title" name="title" maxlength="100" value="{{ product.title }}" required>
+<section class="grid grid-two">
+  <div class="surface">
+    {% if product_has_image %}
+    <div class="product-detail-media">
+      <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지">
+    </div>
+    {% else %}
+    <div class="product-detail-media"><span>대표 이미지가 없습니다.</span></div>
+    {% endif %}
+  </div>
 
-  <label for="description">설명</label>
-  <textarea id="description" name="description" rows="6" maxlength="2000" required>{{ product.description }}</textarea>
-
-  <label for="price">가격 (원)</label>
-  <input type="number" id="price" name="price" min="1" value="{{ product.price }}" required>
-
-  <label for="trade_location">거래 지역 (선택)</label>
-  <input type="text" id="trade_location" name="trade_location" maxlength="120" value="{{ product.trade_location or '' }}" placeholder="예: 대구 수성구">
-
-  <label for="status">상태</label>
-  <select id="status" name="status">
-    <option value="SELLING" {% if product.status == 'SELLING' %}selected{% endif %}>SELLING</option>
-    <option value="RESERVED" {% if product.status == 'RESERVED' %}selected{% endif %}>RESERVED</option>
-    <option value="SOLD" {% if product.status == 'SOLD' %}selected{% endif %}>SOLD</option>
-  </select>
-
-  <label for="image">대표 이미지 교체 (선택, JPEG/PNG/WebP, 최대 5 MiB)</label>
-  <input type="file" id="image" name="image" accept="image/jpeg,image/png,image/webp">
-
-  <button type="submit">수정 저장</button>
-</form>
-<p><a href="{{ url_for('view_product', product_id=product.id) }}">상품 상세로 돌아가기</a></p>
+  <div class="surface">
+    <form method="post" action="{{ url_for('edit_product', product_id=product.id) }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div>
+        <label for="title">제목</label>
+        <input type="text" id="title" name="title" maxlength="100" value="{{ product.title }}" required>
+      </div>
+      <div>
+        <label for="description">설명</label>
+        <textarea id="description" name="description" rows="6" maxlength="2000" required>{{ product.description }}</textarea>
+      </div>
+      <div>
+        <label for="price">가격 (원)</label>
+        <input type="number" id="price" name="price" min="1" value="{{ product.price }}" required>
+      </div>
+      <div>
+        <label for="trade_location">거래 지역 (선택)</label>
+        <input type="text" id="trade_location" name="trade_location" maxlength="120" value="{{ product.trade_location or '' }}" placeholder="예: 대구 수성구">
+      </div>
+      <div>
+        <label for="status">상태</label>
+        <select id="status" name="status">
+          <option value="SELLING" {% if product.status == 'SELLING' %}selected{% endif %}>SELLING</option>
+          <option value="RESERVED" {% if product.status == 'RESERVED' %}selected{% endif %}>RESERVED</option>
+          <option value="SOLD" {% if product.status == 'SOLD' %}selected{% endif %}>SOLD</option>
+        </select>
+      </div>
+      <div>
+        <label for="image">대표 이미지 교체 (선택, JPEG/PNG/WebP, 최대 5 MiB)</label>
+        <input type="file" id="image" name="image" accept="image/jpeg,image/png,image/webp">
+        <p class="field-hint">새 파일을 선택하지 않으면 기존 이미지가 유지됩니다.</p>
+      </div>
+      <div class="form-actions">
+        <button type="submit">수정 저장</button>
+        <a class="button button-secondary" href="{{ url_for('view_product', product_id=product.id) }}">상품 상세로 돌아가기</a>
+      </div>
+    </form>
+  </div>
+</section>
 {% endblock %}

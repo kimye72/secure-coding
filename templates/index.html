@@ -1,6 +1,12 @@
 {% extends "base.html" %}
 {% block title %}환영합니다{% endblock %}
 {% block content %}
-<h1>My Market에 오신 것을 환영합니다</h1>
-<p><a href="{{ url_for('login') }}">로그인</a> 또는 <a href="{{ url_for('register') }}">회원가입</a> 해주세요.</p>
+<section class="hero">
+  <h1>My Market에 오신 것을 환영합니다</h1>
+  <p class="muted">상품 등록, 거래 요청, 포인트 에스크로, 리뷰까지 한 곳에서 관리합니다.</p>
+  <div class="actions">
+    <a class="button" href="{{ url_for('login') }}">로그인</a>
+    <a class="button button-secondary" href="{{ url_for('register') }}">회원가입</a>
+  </div>
+</section>
 {% endblock %}

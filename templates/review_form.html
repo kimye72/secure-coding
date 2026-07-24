@@ -1,33 +1,41 @@
 {% extends "base.html" %}
 {% block title %}거래 리뷰 작성{% endblock %}
 {% block content %}
-<h2>거래 리뷰 작성</h2>
+<section class="page-header">
+  <h2>거래 리뷰 작성</h2>
+  <p>완료된 거래 상대방에 대한 리뷰를 남깁니다.</p>
+</section>
 
-<p><strong>상품:</strong> {{ product.title }}</p>
-<p><strong>리뷰 대상:</strong> {{ reviewee.username }}</p>
+<section class="surface">
+  <ul class="detail-list">
+    <li><strong>상품</strong><span>{{ product.title }}</span></li>
+    <li><strong>리뷰 대상</strong><span>{{ reviewee.username }}</span></li>
+  </ul>
 
-{% if already_reviewed %}
-<p>이미 이 거래에 대한 리뷰를 작성했습니다.</p>
-{% else %}
-<form method="post" action="{{ url_for('trade_review', trade_id=trade.id) }}">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-  <label for="rating">평점</label>
-  <select id="rating" name="rating" required>
-    <option value="">선택</option>
-    <option value="5">5</option>
-    <option value="4">4</option>
-    <option value="3">3</option>
-    <option value="2">2</option>
-    <option value="1">1</option>
-  </select>
-
-  <label for="content">리뷰 내용 (선택, 최대 500자)</label>
-  <textarea id="content" name="content" rows="5" maxlength="500"></textarea>
-
-  <button type="submit">리뷰 등록</button>
-</form>
-{% endif %}
+  {% if already_reviewed %}
+  <p class="empty-state">이미 이 거래에 대한 리뷰를 작성했습니다.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('trade_review', trade_id=trade.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div>
+      <label for="rating">평점</label>
+      <select id="rating" name="rating" required>
+        <option value="">선택</option>
+        <option value="5">5</option>
+        <option value="4">4</option>
+        <option value="3">3</option>
+        <option value="2">2</option>
+        <option value="1">1</option>
+      </select>
+    </div>
+    <div>
+      <label for="content">리뷰 내용 (선택, 최대 500자)</label>
+      <textarea id="content" name="content" rows="5" maxlength="500"></textarea>
+    </div>
+    <button type="submit">리뷰 등록</button>
+  </form>
+  {% endif %}
+</section>
 
 <p><a href="{{ url_for('trades') }}">거래 내역으로 돌아가기</a></p>
 {% endblock %}

@@ -1,38 +1,42 @@
 {% extends "base.html" %}
 {% block title %}신고 상세보기{% endblock %}
 {% block content %}
-<h2>신고 상세보기</h2>
+<section class="admin-panel">
+  <h2>신고 상세보기</h2>
+  <ul class="detail-list">
+    <li><strong>신고 ID</strong><span>{{ report.id }}</span></li>
+    <li><strong>신고자</strong><span>{{ report.reporter.username }}</span></li>
+    <li><strong>대상 유형</strong><span class="badge">{{ report.target_type }}</span></li>
+    <li><strong>대상 요약</strong><span>{{ target_summary }}</span></li>
+    <li><strong>작성일</strong><span>{{ report.created_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+    {% if report.handled_at %}
+    <li><strong>수정일(처리일)</strong><span>{{ report.handled_at.strftime('%Y-%m-%d %H:%M') }}</span></li>
+    {% endif %}
+    <li><strong>처리자</strong><span>{{ report.handler.username if report.handler else '-' }}</span></li>
+    <li><strong>상태</strong><span class="badge badge-{{ report.status|lower }}">{{ report.status }}</span></li>
+  </ul>
+</section>
 
-<ul>
-  <li><strong>신고 ID:</strong> {{ report.id }}</li>
-  <li><strong>신고자:</strong> {{ report.reporter.username }}</li>
-  <li><strong>대상 유형:</strong> {{ report.target_type }}</li>
-  <li><strong>대상 요약:</strong> {{ target_summary }}</li>
-  <li><strong>작성일:</strong> {{ report.created_at.strftime('%Y-%m-%d %H:%M') }}</li>
-  {% if report.handled_at %}
-  <li><strong>수정일(처리일):</strong> {{ report.handled_at.strftime('%Y-%m-%d %H:%M') }}</li>
+<section class="surface">
+  <h3>신고 사유</h3>
+  <p class="prewrap">{{ report.reason }}</p>
+
+  {% if report.status == 'PENDING' %}
+  <h3>신고 처리</h3>
+  <div class="actions">
+    <form method="post" action="{{ url_for('admin_report_resolve', report_id=report.id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">해결 (RESOLVED)</button>
+    </form>
+    <form method="post" action="{{ url_for('admin_report_reject', report_id=report.id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="button-warning">기각 (DISMISSED)</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="empty-state">이미 처리된 신고입니다.</p>
   {% endif %}
-  <li><strong>처리자:</strong> {{ report.handler.username if report.handler else '-' }}</li>
-  <li><strong>상태:</strong> {{ report.status }}</li>
-</ul>
+</section>
 
-<h3>신고 사유</h3>
-<p style="white-space: pre-wrap;">{{ report.reason }}</p>
-
-{% if report.status == 'PENDING' %}
-<h3>신고 처리</h3>
-<form method="post" action="{{ url_for('admin_report_resolve', report_id=report.id) }}" style="display:inline;">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit">해결 (RESOLVED)</button>
-</form>
-<form method="post" action="{{ url_for('admin_report_reject', report_id=report.id) }}" style="display:inline;">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <button type="submit">기각 (DISMISSED)</button>
-</form>
-{% else %}
-<p>이미 처리된 신고입니다.</p>
-{% endif %}
-
-<br>
-<a href="{{ url_for('admin_reports') }}">목록으로 돌아가기</a>
+<p><a href="{{ url_for('admin_reports') }}">목록으로 돌아가기</a></p>
 {% endblock %}

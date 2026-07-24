@@ -1,111 +1,121 @@
 {% extends "base.html" %}
 {% block title %}내 거래 내역{% endblock %}
 {% block content %}
-<h2>내 거래 내역</h2>
+<section class="page-header">
+  <h2>내 거래 내역</h2>
+  <p>수신·발신 거래 요청과 결제 상태를 한 곳에서 확인합니다.</p>
+</section>
 
-{# ── 수신 거래 (판매자로서 받은 요청) ──────────────────────────── #}
-<h3>수신 거래 요청 (판매자)</h3>
-{% if incoming_trades %}
-  <ul>
+<section class="surface">
+  <h3>수신 거래 요청 (판매자)</h3>
+  {% if incoming_trades %}
+  <ul class="trade-list">
     {% for trade in incoming_trades %}
-      <li>
+    <li class="trade-item">
+      <div class="trade-title">
         <strong><a href="{{ url_for('view_product', product_id=trade.product.id) }}">{{ trade.product.title }}</a></strong>
-        — 구매 요청자: {{ trade.buyer.username if trade.buyer else '알 수 없음' }}
-        / 상태: {{ trade.status }}
+        <span class="badge badge-{{ trade.status|lower }}">{{ trade.status }}</span>
+      </div>
+      <div class="meta-list">
+        <div class="meta-row"><span>구매 요청자</span><strong>{{ trade.buyer.username if trade.buyer else '알 수 없음' }}</strong></div>
         {% if trade.payment %}
-        / 결제 상태: {{ trade.payment.status }} ({{ trade.payment.amount }} 포인트)
+        <div class="meta-row"><span>결제 상태: {{ trade.payment.status }}</span><strong><span class="badge badge-{{ trade.payment.status|lower }}">{{ trade.payment.status }}</span> ({{ trade.payment.amount }} 포인트)</strong></div>
         {% elif trade.status == 'ACCEPTED' %}
-        / 결제 상태: 미결제
+        <div class="meta-row"><span>결제 상태</span><strong>미결제</strong></div>
         {% endif %}
-        / 요청일: {{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}
+        <div class="meta-row"><span>요청일</span><strong>{{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}</strong></div>
+      </div>
 
-        {# 판매자 전용 액션 — 서버에서 seller_id == current_user_id 검증됨 #}
+      <div class="actions">
         {% if trade.status == 'PENDING' %}
-          <form method="post" action="{{ url_for('trade_accept', trade_id=trade.id) }}" style="display:inline;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit">수락</button>
-          </form>
-          <form method="post" action="{{ url_for('trade_reject', trade_id=trade.id) }}" style="display:inline;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('이 거래 요청을 거절하시겠습니까?');">거절</button>
-          </form>
+        <form method="post" action="{{ url_for('trade_accept', trade_id=trade.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="button-small">수락</button>
+        </form>
+        <form method="post" action="{{ url_for('trade_reject', trade_id=trade.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="button-warning button-small">거절</button>
+        </form>
         {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
-          {# 수락된 거래는 판매자도 취소 가능 (상품이 RESERVED인 동안) #}
-          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('수락한 거래를 취소하시겠습니까?');">취소</button>
-          </form>
-          <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
+        <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="button-danger button-small">취소</button>
+        </form>
+        <a class="button button-secondary button-small" href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
         {% elif trade.status == 'COMPLETED' %}
           {% if trade.id not in reviewed_trade_ids %}
-          <a href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
+          <a class="button button-secondary button-small" href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
           {% else %}
-          <span>리뷰 작성 완료</span>
+          <span class="badge badge-success">리뷰 작성 완료</span>
           {% endif %}
         {% endif %}
-        {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
-      </li>
+      </div>
+    </li>
     {% endfor %}
   </ul>
-{% else %}
-  <p>수신된 거래 요청이 없습니다.</p>
-{% endif %}
+  {% else %}
+  <p class="empty-state">수신된 거래 요청이 없습니다.</p>
+  {% endif %}
+</section>
 
-{# ── 발신 거래 (구매자로서 보낸 요청) ──────────────────────────── #}
-<h3>발신 거래 요청 (구매자)</h3>
-{% if outgoing_trades %}
-  <ul>
+<section class="surface">
+  <h3>발신 거래 요청 (구매자)</h3>
+  {% if outgoing_trades %}
+  <ul class="trade-list">
     {% for trade in outgoing_trades %}
-      <li>
+    <li class="trade-item">
+      <div class="trade-title">
         <strong><a href="{{ url_for('view_product', product_id=trade.product.id) }}">{{ trade.product.title }}</a></strong>
-        — 판매자: {{ trade.seller.username if trade.seller else '알 수 없음' }}
-        / 상태: {{ trade.status }}
+        <span class="badge badge-{{ trade.status|lower }}">{{ trade.status }}</span>
+      </div>
+      <div class="meta-list">
+        <div class="meta-row"><span>판매자</span><strong>{{ trade.seller.username if trade.seller else '알 수 없음' }}</strong></div>
         {% if trade.payment %}
-        / 결제 상태: {{ trade.payment.status }} ({{ trade.payment.amount }} 포인트)
+        <div class="meta-row"><span>결제 상태: {{ trade.payment.status }}</span><strong><span class="badge badge-{{ trade.payment.status|lower }}">{{ trade.payment.status }}</span> ({{ trade.payment.amount }} 포인트)</strong></div>
         {% elif trade.status == 'ACCEPTED' %}
-        / 결제 예정 금액: {{ trade.product.price }} 포인트
+        <div class="meta-row"><span>결제 예정 금액</span><strong>{{ trade.product.price }} 포인트</strong></div>
         {% endif %}
-        / 요청일: {{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}
+        <div class="meta-row"><span>요청일</span><strong>{{ trade.created_at.strftime('%Y-%m-%d %H:%M') }}</strong></div>
+      </div>
 
-        {# 구매자 전용 액션 #}
+      <div class="actions">
         {% if trade.status == 'PENDING' %}
-          {# PENDING 취소: 구매자만 가능 #}
-          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('거래 요청을 취소하시겠습니까?');">취소</button>
-          </form>
+        <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="button-danger button-small">취소</button>
+        </form>
         {% elif trade.status == 'ACCEPTED' and trade.product.status == 'RESERVED' %}
-          {# ACCEPTED 취소: 상품이 RESERVED인 동안 구매자도 취소 가능 #}
           {% if not trade.payment %}
-          <form method="post" action="{{ url_for('trade_pay', trade_id=trade.id) }}" style="display:inline;">
+          <form method="post" action="{{ url_for('trade_pay', trade_id=trade.id) }}" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('상품 가격 {{ trade.product.price }} 포인트를 결제하시겠습니까?');">결제</button>
+            <button type="submit" class="button-small">결제</button>
           </form>
           {% elif trade.payment.status == 'HELD' %}
-          <form method="post" action="{{ url_for('trade_complete', trade_id=trade.id) }}" style="display:inline;">
+          <form method="post" action="{{ url_for('trade_complete', trade_id=trade.id) }}" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('거래를 완료하시겠습니까?');">거래 완료</button>
+            <button type="submit" class="button-small">거래 완료</button>
           </form>
           {% endif %}
-          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" style="display:inline;">
+          <form method="post" action="{{ url_for('trade_cancel', trade_id=trade.id) }}" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" onclick="return confirm('수락된 거래를 취소하시겠습니까?');">취소</button>
+            <button type="submit" class="button-danger button-small">취소</button>
           </form>
-          <a href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
+          <a class="button button-secondary button-small" href="{{ url_for('trade_chat', trade_id=trade.id) }}">채팅</a>
         {% elif trade.status == 'COMPLETED' %}
           {% if trade.id not in reviewed_trade_ids %}
-          <a href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
+          <a class="button button-secondary button-small" href="{{ url_for('trade_review', trade_id=trade.id) }}">리뷰 작성</a>
           {% else %}
-          <span>리뷰 작성 완료</span>
+          <span class="badge badge-success">리뷰 작성 완료</span>
           {% endif %}
         {% endif %}
-        {# REJECTED / CANCELLED 는 종료 상태 — 추가 액션 없음 #}
-      </li>
+      </div>
+    </li>
     {% endfor %}
   </ul>
-{% else %}
-  <p>발신한 거래 요청이 없습니다.</p>
-{% endif %}
+  {% else %}
+  <p class="empty-state">발신한 거래 요청이 없습니다.</p>
+  {% endif %}
+</section>
 
 <p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
 {% endblock %}

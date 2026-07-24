@@ -1,53 +1,76 @@
 {% extends "base.html" %}
 {% block title %}대시보드{% endblock %}
 {% block content %}
-<h2>대시보드</h2>
+<section class="page-header">
+  <h2>대시보드</h2>
+  <p>상품을 검색하고 거래 지역과 상태로 좁혀 볼 수 있습니다.</p>
+</section>
 
-{# ── 검색 / 필터 폼 ──────────────────────────────────────────────── #}
-<form method="get" action="{{ url_for('dashboard') }}" style="margin-bottom:20px;">
-  <input type="text" name="q" value="{{ query }}" placeholder="상품 제목 또는 설명 검색" maxlength="100"
-    style="width:50%;display:inline-block;margin-bottom:0;">
-  <input type="text" name="location" value="{{ location_query }}" placeholder="거래 지역 검색" maxlength="120"
-    style="width:25%;display:inline-block;margin-bottom:0;margin-left:8px;">
-  <select name="status" style="width:auto;display:inline-block;margin-bottom:0;margin-left:8px;">
-    <option value="" {% if not selected_status %}selected{% endif %}>전체 상태</option>
-    {% for s in product_statuses | sort %}
-    <option value="{{ s }}" {% if selected_status==s %}selected{% endif %}>{{ s }}</option>
-    {% endfor %}
-  </select>
-  <button type="submit" style="width:auto;display:inline-block;margin-left:8px;margin-bottom:0;">검색</button>
-  <a href="{{ url_for('dashboard') }}" style="margin-left:12px;">초기화</a>
-</form>
+<section class="surface">
+  <form method="get" action="{{ url_for('dashboard') }}" class="search-panel">
+    <div>
+      <label for="q">상품 검색</label>
+      <input id="q" type="text" name="q" value="{{ query }}" placeholder="상품 제목 또는 설명 검색" maxlength="100">
+    </div>
+    <div>
+      <label for="location">거래 지역</label>
+      <input id="location" type="text" name="location" value="{{ location_query }}" placeholder="예: 수성구" maxlength="120">
+    </div>
+    <div>
+      <label for="status">상태</label>
+      <select id="status" name="status">
+        <option value="" {% if not selected_status %}selected{% endif %}>전체 상태</option>
+        {% for s in product_statuses | sort %}
+        <option value="{{ s }}" {% if selected_status==s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">검색</button>
+    <a class="button button-secondary" href="{{ url_for('dashboard') }}">초기화</a>
+  </form>
 
-{# ── 상품 목록 ──────────────────────────────────────────────────── #}
-<h3>등록된 상품</h3>
-{% if products %}
-<ul>
-  {% for product in products %}
-  <li>
-    {% if product.id in product_image_ids %}
-    <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지" style="max-width:80px;height:auto;vertical-align:middle;margin-right:8px;">
-    {% else %}
-    <span style="display:inline-block;width:80px;margin-right:8px;">이미지 없음</span>
+  <div class="actions">
+    <a class="button" href="{{ url_for('new_product') }}">새 상품 등록</a>
+    <a class="button button-secondary" href="{{ url_for('trades') }}">내 거래 내역</a>
+    <a class="button button-secondary" href="{{ url_for('report') }}">신고하기</a>
+    {% if user.role == 'ADMIN' %}
+    <a class="button button-secondary" href="{{ url_for('admin_reports') }}">신고 목록 관리(관리자)</a>
+    <a class="button button-secondary" href="{{ url_for('admin_users') }}">사용자 관리(관리자)</a>
+    <a class="button button-secondary" href="{{ url_for('admin_support_list') }}">고객지원 관리(관리자)</a>
     {% endif %}
-    <a href="{{ url_for('view_product', product_id=product.id) }}">{{ product.title }}</a>
-    - 가격: {{ product.price }}원
-    - 거래 지역: {{ product.trade_location or '위치 미등록' }}
-    - 상태: {{ product.status }}
-  </li>
-  {% endfor %}
-</ul>
-{% else %}
-<p>검색 결과가 없습니다.</p>
-{% endif %}
-<p>
-  <a href="{{ url_for('new_product') }}">새 상품 등록</a> |
-  <a href="{{ url_for('trades') }}">내 거래 내역</a> |
-  <a href="{{ url_for('report') }}">신고하기</a>
-  {% if user.role == 'ADMIN' %}
-  | <a href="{{ url_for('admin_reports') }}">신고 목록 관리(관리자)</a>
-  | <a href="{{ url_for('admin_users') }}">사용자 관리(관리자)</a>
-  | <a href="{{ url_for('admin_support_list') }}">고객지원 관리(관리자)</a>
+  </div>
+</section>
+
+<section class="stack">
+  <h3>등록된 상품</h3>
+  {% if products %}
+  <div class="product-grid">
+    {% for product in products %}
+    <article class="product-tile">
+      <a class="product-media" href="{{ url_for('view_product', product_id=product.id) }}">
+        {% if product.id in product_image_ids %}
+        <img src="{{ url_for('product_image', product_id=product.id) }}" alt="{{ product.title }} 대표 이미지">
+        {% else %}
+        <span>이미지 없음</span>
+        {% endif %}
+      </a>
+      <div class="product-body">
+        <h4 class="product-title">
+          <a href="{{ url_for('view_product', product_id=product.id) }}">{{ product.title }}</a>
+        </h4>
+        <p class="price">{{ product.price }}원</p>
+        <p class="muted">거래 지역: {{ product.trade_location or '위치 미등록' }}</p>
+        <span class="badge badge-{{ product.status|lower }}">{{ product.status }}</span>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>검색 결과가 없습니다.</h3>
+    <p>검색어 또는 거래 지역을 조정하거나 새 상품을 등록해 보세요.</p>
+    <a class="button" href="{{ url_for('new_product') }}">새 상품 등록</a>
+  </div>
   {% endif %}
-</p>
+</section>
 {% endblock %}

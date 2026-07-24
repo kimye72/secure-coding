@@ -1,45 +1,52 @@
 {% extends "base.html" %}
 {% block title %}관리자 - 신고 목록{% endblock %}
 {% block content %}
-<h2>신고 목록 (관리자)</h2>
+<section class="admin-panel">
+  <h2>신고 목록 (관리자)</h2>
+  <form method="get" action="{{ url_for('admin_reports') }}" class="search-panel">
+    <div>
+      <label for="status">상태 필터</label>
+      <select name="status" id="status">
+        <option value="">전체</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit">필터 적용</button>
+  </form>
+</section>
 
-<form method="get" action="{{ url_for('admin_reports') }}">
-  <label for="status">상태 필터:</label>
-  <select name="status" id="status">
-    <option value="">전체</option>
-    {% for s in statuses %}
-    <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
-    {% endfor %}
-  </select>
-  <button type="submit">필터 적용</button>
-</form>
-
-<table border="1">
-  <tr>
-    <th>신고 ID</th>
-    <th>신고자</th>
-    <th>대상 유형</th>
-    <th>대상 요약</th>
-    <th>상태</th>
-    <th>작성일</th>
-    <th>처리자</th>
-    <th>상세보기</th>
-  </tr>
-  {% for data in report_data %}
-  <tr>
-    <td>{{ data.report.id }}</td>
-    <td>{{ data.report.reporter.username }}</td>
-    <td>{{ data.report.target_type }}</td>
-    <td>{{ data.target_summary }}</td>
-    <td>{{ data.report.status }}</td>
-    <td>{{ data.report.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-    <td>{{ data.report.handler.username if data.report.handler else '-' }}</td>
-    <td><a href="{{ url_for('admin_report_detail', report_id=data.report.id) }}">상세보기</a></td>
-  </tr>
-  {% else %}
-  <tr>
-    <td colspan="8">접수된 신고가 없습니다.</td>
-  </tr>
-  {% endfor %}
-</table>
+<section class="surface">
+  <div class="table-wrap">
+    <table>
+      <tr>
+        <th>신고 ID</th>
+        <th>신고자</th>
+        <th>대상 유형</th>
+        <th>대상 요약</th>
+        <th>상태</th>
+        <th>작성일</th>
+        <th>처리자</th>
+        <th>상세보기</th>
+      </tr>
+      {% for data in report_data %}
+      <tr>
+        <td>{{ data.report.id }}</td>
+        <td>{{ data.report.reporter.username }}</td>
+        <td><span class="badge">{{ data.report.target_type }}</span></td>
+        <td>{{ data.target_summary }}</td>
+        <td><span class="badge badge-{{ data.report.status|lower }}">{{ data.report.status }}</span></td>
+        <td>{{ data.report.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ data.report.handler.username if data.report.handler else '-' }}</td>
+        <td><a href="{{ url_for('admin_report_detail', report_id=data.report.id) }}">상세보기</a></td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8">접수된 신고가 없습니다.</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</section>
 {% endblock %}

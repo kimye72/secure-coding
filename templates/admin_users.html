@@ -1,57 +1,64 @@
 {% extends "base.html" %}
 {% block title %}관리자 - 사용자 관리{% endblock %}
 {% block content %}
-<h2>사용자 관리 (관리자)</h2>
+<section class="admin-panel">
+  <h2>사용자 관리 (관리자)</h2>
+  <p>사용자 상태와 테스트 포인트 지급을 관리합니다.</p>
+  <div class="actions">
+    <a class="button button-secondary" href="{{ url_for('admin_reports') }}">신고 목록 관리로 이동</a>
+    <a class="button button-secondary" href="{{ url_for('admin_support_list') }}">고객지원 관리로 이동</a>
+  </div>
+</section>
 
-<p>
-  <a href="{{ url_for('admin_reports') }}">신고 목록 관리로 이동</a>
-</p>
-
-<table border="1">
-  <tr>
-    <th>사용자명</th>
-    <th>역할</th>
-    <th>상태</th>
-    <th>테스트 포인트 지급</th>
-    <th>작업</th>
-  </tr>
-  {% for user in users %}
-  <tr>
-    <td>{{ user.username }}</td>
-    <td>{{ user.role }}</td>
-    <td>{% if user.is_active %}ACTIVE{% else %}BANNED{% endif %}</td>
-    <td>
-      <form method="post" action="{{ url_for('admin_user_points_grant', user_id=user.id) }}">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <label>
-          지급 포인트
-          <input type="number" name="amount" min="1" max="1000000" required>
-        </label>
-        <button type="submit">지급</button>
-      </form>
-    </td>
-    <td>
-      {% if user.role == 'USER' %}
-        {% if user.is_active %}
-        <form method="post" action="{{ url_for('admin_user_ban', user_id=user.id) }}" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">BAN</button>
-        </form>
-        {% else %}
-        <form method="post" action="{{ url_for('admin_user_unban', user_id=user.id) }}" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">BAN 해제</button>
-        </form>
-        {% endif %}
+<section class="surface">
+  <div class="table-wrap">
+    <table>
+      <tr>
+        <th>사용자명</th>
+        <th>역할</th>
+        <th>상태</th>
+        <th>테스트 포인트 지급</th>
+        <th>작업</th>
+      </tr>
+      {% for user in users %}
+      <tr>
+        <td>{{ user.username }}</td>
+        <td><span class="badge">{{ user.role }}</span></td>
+        <td>{% if user.is_active %}<span class="badge badge-active">ACTIVE</span>{% else %}<span class="badge badge-banned">BANNED</span>{% endif %}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin_user_points_grant', user_id=user.id) }}" class="form-grid">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label>
+              지급 포인트
+              <input type="number" name="amount" min="1" max="1000000" required>
+            </label>
+            <button type="submit" class="button-small">지급</button>
+          </form>
+        </td>
+        <td>
+          {% if user.role == 'USER' %}
+            {% if user.is_active %}
+            <form method="post" action="{{ url_for('admin_user_ban', user_id=user.id) }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="button-danger button-small">BAN</button>
+            </form>
+            {% else %}
+            <form method="post" action="{{ url_for('admin_user_unban', user_id=user.id) }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="button-small">BAN 해제</button>
+            </form>
+            {% endif %}
+          {% else %}
+          <span class="muted">관리자 계정은 대상이 아닙니다.</span>
+          {% endif %}
+        </td>
+      </tr>
       {% else %}
-        관리자 계정은 대상이 아닙니다.
-      {% endif %}
-    </td>
-  </tr>
-  {% else %}
-  <tr>
-    <td colspan="5">등록된 사용자가 없습니다.</td>
-  </tr>
-  {% endfor %}
-</table>
+      <tr>
+        <td colspan="5">등록된 사용자가 없습니다.</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</section>
 {% endblock %}
