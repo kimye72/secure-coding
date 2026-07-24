@@ -43,6 +43,8 @@ class User(db.Model):
     handled_reports = db.relationship('Report', back_populates='handler', foreign_keys='Report.handled_by')
     written_reviews = db.relationship('Review', back_populates='reviewer', foreign_keys='Review.reviewer_id')
     received_reviews = db.relationship('Review', back_populates='reviewee', foreign_keys='Review.reviewee_id')
+    keyword_subscriptions = db.relationship('KeywordSubscription', back_populates='user', foreign_keys='KeywordSubscription.user_id')
+    notifications = db.relationship('Notification', back_populates='user', foreign_keys='Notification.user_id')
 
     __table_args__ = (
         db.CheckConstraint("role IN ('USER', 'ADMIN')", name='ck_user_role'),
@@ -92,6 +94,7 @@ class Product(db.Model):
     seller = db.relationship('User', back_populates='products', foreign_keys=[seller_id])
     trades = db.relationship('Trade', back_populates='product', foreign_keys='Trade.product_id')
     reviews = db.relationship('Review', back_populates='product', foreign_keys='Review.product_id')
+    notifications = db.relationship('Notification', back_populates='product', foreign_keys='Notification.product_id')
 
     __table_args__ = (
         db.CheckConstraint('price > 0', name='ck_product_price_positive'),
@@ -178,6 +181,54 @@ class Review(db.Model):
 
     def __repr__(self):
         return f'<Review id={self.id} trade_id={self.trade_id} rating={self.rating}>'
+
+
+# ---------------------------------------------------------------------------
+# KeywordSubscription
+# ---------------------------------------------------------------------------
+
+class KeywordSubscription(db.Model):
+    __tablename__ = 'keyword_subscription'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    user_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    keyword = db.Column(db.String(80), nullable=False)
+    normalized_keyword = db.Column(db.String(240), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship('User', back_populates='keyword_subscriptions', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'normalized_keyword', name='uq_keyword_subscription_user_normalized'),
+    )
+
+    def __repr__(self):
+        return f'<KeywordSubscription id={self.id} user_id={self.user_id}>'
+
+
+# ---------------------------------------------------------------------------
+# Notification
+# ---------------------------------------------------------------------------
+
+class Notification(db.Model):
+    __tablename__ = 'notification'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    user_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    product_id = db.Column(db.String(36), db.ForeignKey('product.id'), index=True, nullable=False)
+    matched_keyword = db.Column(db.String(80), nullable=False)
+    is_read = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship('User', back_populates='notifications', foreign_keys=[user_id])
+    product = db.relationship('Product', back_populates='notifications', foreign_keys=[product_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'product_id', name='uq_notification_user_product'),
+    )
+
+    def __repr__(self):
+        return f'<Notification id={self.id} user_id={self.user_id} is_read={self.is_read}>'
 
 
 # ---------------------------------------------------------------------------

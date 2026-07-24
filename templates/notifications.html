@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}알림{% endblock %}
+{% block content %}
+<h2>알림</h2>
+
+<h3>관심 키워드 등록</h3>
+<form method="post" action="{{ url_for('create_keyword_subscription') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label for="keyword">키워드</label>
+  <input type="text" id="keyword" name="keyword" maxlength="80" required>
+  <button type="submit">등록</button>
+</form>
+
+<h3>내 관심 키워드</h3>
+{% if subscriptions %}
+<ul>
+  {% for subscription in subscriptions %}
+  <li>
+    {{ subscription.keyword }}
+    <form method="post" action="{{ url_for('delete_keyword_subscription', subscription_id=subscription.id) }}" style="display:inline;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" style="width:auto;display:inline;margin-left:8px;">삭제</button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>등록된 관심 키워드가 없습니다.</p>
+{% endif %}
+
+<h3>내 알림</h3>
+{% if notifications %}
+<form method="post" action="{{ url_for('mark_all_notifications_read') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <button type="submit">모두 읽음 처리</button>
+</form>
+<ul>
+  {% for notification in notifications %}
+  <li>
+    <p>상태: {% if notification.is_read %}읽음{% else %}읽지 않음{% endif %}</p>
+    <p>매칭 키워드: {{ notification.matched_keyword }}</p>
+    {% if notification.product %}
+    <p>상품: <a href="{{ url_for('view_product', product_id=notification.product.id) }}">{{ notification.product.title }}</a></p>
+    {% else %}
+    <p>상품: 표시할 수 없는 상품입니다.</p>
+    {% endif %}
+    <p>알림 생성일: {{ notification.created_at.strftime('%Y-%m-%d %H:%M') }}</p>
+    {% if not notification.is_read %}
+    <form method="post" action="{{ url_for('mark_notification_read', notification_id=notification.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">읽음 처리</button>
+    </form>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p>아직 받은 알림이 없습니다.</p>
+{% endif %}
+
+<p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
+{% endblock %}

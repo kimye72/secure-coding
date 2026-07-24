@@ -15,6 +15,12 @@ from werkzeug.exceptions import RequestEntityTooLarge
 
 from market.config import Config
 from market.extensions import db, socketio, csrf, limiter
+from market.keyword_notifications import (
+    KeywordValidationError,
+    MAX_KEYWORD_SUBSCRIPTIONS_PER_USER,
+    matching_subscriptions_for_product,
+    normalize_keyword,
+)
 from market.product_images import (
     MAX_PRODUCT_IMAGE_BYTES,
     ProductImageError,
@@ -366,6 +372,14 @@ def _normalize_trade_id(value):
     except (ValueError, TypeError, AttributeError):
         return None
 
+
+def _normalize_uuid(value):
+    try:
+        return str(uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def _resolve_report_target(target_type, target_id):
     """target_type과 target_id를 검증하고 대상을 반환한다.
     실패 시 None을 반환하며, 오류 상세를 노출하지 않는다."""
@@ -395,13 +409,16 @@ def _resolve_report_target(target_type, target_id):
 
 def _register_routes(app):
     """모든 애플리케이션 라우트를 등록한다."""
-    from market.models import User, Product, Trade, Review, Report
+    from market.models import User, Product, Trade, Review, KeywordSubscription, Notification, Report
 
     login_required = _get_login_required(app)
 
     trade_state_action_limit = limiter.shared_limit('30 per hour', scope='trade-state-actions', key_func=_rate_limit_identity, methods=['POST'])
     trade_completion_action_limit = limiter.shared_limit('20 per hour', scope='trade-completion-actions', key_func=_rate_limit_identity, methods=['POST'])
     review_action_limit = limiter.shared_limit('10 per hour', scope='review-actions', key_func=_rate_limit_identity, methods=['POST'])
+    keyword_create_limit = limiter.shared_limit('20 per hour', scope='keyword-create-actions', key_func=_rate_limit_identity, methods=['POST'])
+    keyword_delete_limit = limiter.shared_limit('40 per hour', scope='keyword-delete-actions', key_func=_rate_limit_identity, methods=['POST'])
+    notification_read_limit = limiter.shared_limit('60 per hour', scope='notification-read-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_user_action_limit = limiter.shared_limit('30 per hour', scope='admin-user-actions', key_func=_rate_limit_identity, methods=['POST'])
 
@@ -410,6 +427,32 @@ def _register_routes(app):
 
     # 편집/삭제 시 공통으로 사용하는 권한 없음 메시지
     _PRODUCT_AUTH_ERROR = '상품을 찾을 수 없거나 수정 권한이 없습니다.'
+
+    def _build_product_notifications(product):
+        subscriptions = (
+            KeywordSubscription.query
+            .join(User, KeywordSubscription.user_id == User.id)
+            .filter(
+                User.is_active.is_(True),
+                KeywordSubscription.user_id != product.seller_id,
+            )
+            .order_by(
+                KeywordSubscription.user_id.asc(),
+                KeywordSubscription.created_at.asc(),
+                KeywordSubscription.id.asc(),
+            )
+            .all()
+        )
+
+        notifications = []
+        for subscription in matching_subscriptions_for_product(subscriptions, product.title, product.description):
+            notifications.append(Notification(
+                user_id=subscription.user_id,
+                product_id=product.id,
+                matched_keyword=subscription.keyword,
+                is_read=False,
+            ))
+        return notifications
 
     def _review_context(trade_id, reviewer_id):
         validated_trade_id = _normalize_trade_id(trade_id)
@@ -651,6 +694,147 @@ def _register_routes(app):
         )
 
     # -------------------------------------------------------------------
+    # 알림/관심 키워드 관리
+    # -------------------------------------------------------------------
+
+    @app.route('/notifications')
+    @login_required
+    def notifications_page():
+        current_user_id = session['user_id']
+        subscriptions = (
+            KeywordSubscription.query
+            .filter(KeywordSubscription.user_id == current_user_id)
+            .order_by(KeywordSubscription.created_at.asc(), KeywordSubscription.id.asc())
+            .all()
+        )
+        notifications = (
+            Notification.query
+            .filter(Notification.user_id == current_user_id)
+            .order_by(Notification.created_at.desc(), Notification.id.asc())
+            .all()
+        )
+        return render_template(
+            'notifications.html',
+            subscriptions=subscriptions,
+            notifications=notifications,
+        )
+
+    @app.route('/keywords', methods=['POST'])
+    @keyword_create_limit
+    @login_required
+    def create_keyword_subscription():
+        current_user_id = session['user_id']
+        try:
+            keyword, normalized_keyword = normalize_keyword(request.form.get('keyword'))
+        except KeywordValidationError:
+            flash('관심 키워드를 올바르게 입력해 주세요.')
+            return redirect(url_for('notifications_page'))
+
+        existing = KeywordSubscription.query.filter_by(
+            user_id=current_user_id,
+            normalized_keyword=normalized_keyword,
+        ).first()
+        if existing is not None:
+            flash('이미 등록된 관심 키워드입니다.')
+            return redirect(url_for('notifications_page'))
+
+        subscription_count = KeywordSubscription.query.filter_by(user_id=current_user_id).count()
+        if subscription_count >= MAX_KEYWORD_SUBSCRIPTIONS_PER_USER:
+            flash('관심 키워드를 더 이상 등록할 수 없습니다.')
+            return redirect(url_for('notifications_page'))
+
+        subscription = KeywordSubscription(
+            user_id=current_user_id,
+            keyword=keyword,
+            normalized_keyword=normalized_keyword,
+        )
+        try:
+            db.session.add(subscription)
+            db.session.commit()
+            flash('관심 키워드가 등록되었습니다.')
+        except IntegrityError:
+            db.session.rollback()
+            flash('관심 키워드를 등록할 수 없습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('관심 키워드 등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('notifications_page'))
+
+    @app.route('/keywords/<subscription_id>/delete', methods=['POST'])
+    @keyword_delete_limit
+    @login_required
+    def delete_keyword_subscription(subscription_id):
+        current_user_id = session['user_id']
+        validated_subscription_id = _normalize_uuid(subscription_id)
+        if validated_subscription_id is None:
+            flash('관심 키워드를 삭제할 수 없습니다.')
+            return redirect(url_for('notifications_page'))
+
+        subscription = db.session.get(KeywordSubscription, validated_subscription_id)
+        if subscription is None or subscription.user_id != current_user_id:
+            flash('관심 키워드를 삭제할 수 없습니다.')
+            return redirect(url_for('notifications_page'))
+
+        try:
+            db.session.delete(subscription)
+            db.session.commit()
+            flash('관심 키워드가 삭제되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('관심 키워드 삭제 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('notifications_page'))
+
+    @app.route('/notifications/<notification_id>/read', methods=['POST'])
+    @notification_read_limit
+    @login_required
+    def mark_notification_read(notification_id):
+        current_user_id = session['user_id']
+        validated_notification_id = _normalize_uuid(notification_id)
+        if validated_notification_id is None:
+            flash('알림을 처리할 수 없습니다.')
+            return redirect(url_for('notifications_page'))
+
+        notification = db.session.get(Notification, validated_notification_id)
+        if notification is None or notification.user_id != current_user_id:
+            flash('알림을 처리할 수 없습니다.')
+            return redirect(url_for('notifications_page'))
+
+        try:
+            if not notification.is_read:
+                notification.is_read = True
+            db.session.commit()
+            flash('알림을 읽음 처리했습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('알림 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('notifications_page'))
+
+    @app.route('/notifications/read-all', methods=['POST'])
+    @notification_read_limit
+    @login_required
+    def mark_all_notifications_read():
+        current_user_id = session['user_id']
+        try:
+            (
+                Notification.query
+                .filter(
+                    Notification.user_id == current_user_id,
+                    Notification.is_read.is_(False),
+                )
+                .update({Notification.is_read: True}, synchronize_session=False)
+            )
+            db.session.commit()
+            flash('모든 알림을 읽음 처리했습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('알림 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('notifications_page'))
+
+    # -------------------------------------------------------------------
     # 새 상품 등록 (강화된 버전)
     # -------------------------------------------------------------------
 
@@ -683,9 +867,9 @@ def _register_routes(app):
                     status=Product.STATUS_SELLING,          # 초기 상태는 항상 SELLING
                 )
                 db.session.add(new_prod)
+                db.session.flush()
 
                 if has_product_image_upload(image_file):
-                    db.session.flush()
                     staged_image = stage_product_image(
                         image_file,
                         new_prod.id,
@@ -695,6 +879,7 @@ def _register_routes(app):
                     install_staged_product_image(staged_image)
                     installed_image_path = staged_image.final_path
 
+                db.session.add_all(_build_product_notifications(new_prod))
                 db.session.commit()
                 flash('상품이 등록되었습니다.')
                 return redirect(url_for('dashboard'))
@@ -966,6 +1151,7 @@ def _register_routes(app):
 
         try:
             product_id_to_delete = product.id
+            Notification.query.filter(Notification.product_id == product_id_to_delete).delete(synchronize_session=False)
             db.session.delete(product)
             db.session.commit()
             remove_product_images(app.config['PRODUCT_IMAGE_UPLOAD_DIR'], product_id_to_delete)
