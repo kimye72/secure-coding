@@ -10,6 +10,7 @@ from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from market.extensions import db
+from market.points import MAX_POINT_BALANCE
 
 
 def generate_uuid():
@@ -46,6 +47,8 @@ class User(db.Model):
     keyword_subscriptions = db.relationship('KeywordSubscription', back_populates='user', foreign_keys='KeywordSubscription.user_id')
     notifications = db.relationship('Notification', back_populates='user', foreign_keys='Notification.user_id')
     support_tickets = db.relationship('SupportTicket', back_populates='user', foreign_keys='SupportTicket.user_id')
+    point_wallet = db.relationship('PointWallet', back_populates='user', foreign_keys='PointWallet.user_id', uselist=False)
+    point_ledger_entries = db.relationship('PointLedger', back_populates='user', foreign_keys='PointLedger.user_id')
 
     __table_args__ = (
         db.CheckConstraint("role IN ('USER', 'ADMIN')", name='ck_user_role'),
@@ -140,6 +143,7 @@ class Trade(db.Model):
     buyer = db.relationship('User', back_populates='purchase_trades', foreign_keys=[buyer_id])
     seller = db.relationship('User', back_populates='sale_trades', foreign_keys=[seller_id])
     reviews = db.relationship('Review', back_populates='trade', foreign_keys='Review.trade_id')
+    payment = db.relationship('TradePayment', back_populates='trade', foreign_keys='TradePayment.trade_id', uselist=False)
 
     __table_args__ = (
         db.CheckConstraint('buyer_id != seller_id', name='ck_trade_buyer_ne_seller'),
@@ -182,6 +186,136 @@ class Review(db.Model):
 
     def __repr__(self):
         return f'<Review id={self.id} trade_id={self.trade_id} rating={self.rating}>'
+
+
+# ---------------------------------------------------------------------------
+# Point wallet / escrow payment / ledger
+# ---------------------------------------------------------------------------
+
+class PointWallet(db.Model):
+    __tablename__ = 'point_wallet'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    user_id = db.Column(db.String(36), db.ForeignKey('user.id'), unique=True, index=True, nullable=False)
+    balance = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = db.relationship('User', back_populates='point_wallet', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.CheckConstraint(
+            f'balance >= 0 AND balance <= {MAX_POINT_BALANCE}',
+            name='ck_point_wallet_balance_range',
+        ),
+    )
+
+    def __repr__(self):
+        return f'<PointWallet id={self.id} user_id={self.user_id}>'
+
+
+class TradePayment(db.Model):
+    __tablename__ = 'trade_payment'
+
+    STATUS_HELD = 'HELD'
+    STATUS_SETTLED = 'SETTLED'
+    STATUS_REFUNDED = 'REFUNDED'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    trade_id = db.Column(db.String(36), db.ForeignKey('trade.id'), unique=True, index=True, nullable=False)
+    buyer_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    seller_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    amount = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(20), index=True, nullable=False, default='HELD')
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    settled_at = db.Column(db.DateTime, nullable=True)
+    refunded_at = db.Column(db.DateTime, nullable=True)
+
+    trade = db.relationship('Trade', back_populates='payment', foreign_keys=[trade_id])
+    buyer = db.relationship('User', foreign_keys=[buyer_id])
+    seller = db.relationship('User', foreign_keys=[seller_id])
+    ledger_entries = db.relationship('PointLedger', back_populates='payment', foreign_keys='PointLedger.payment_id')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            f'amount >= 1 AND amount <= {MAX_POINT_BALANCE}',
+            name='ck_trade_payment_amount_range',
+        ),
+        db.CheckConstraint('buyer_id != seller_id', name='ck_trade_payment_buyer_ne_seller'),
+        db.CheckConstraint(
+            "status IN ('HELD', 'SETTLED', 'REFUNDED')",
+            name='ck_trade_payment_status',
+        ),
+        db.CheckConstraint(
+            "("
+            "status = 'HELD' AND settled_at IS NULL AND refunded_at IS NULL"
+            ") OR ("
+            "status = 'SETTLED' AND settled_at IS NOT NULL AND refunded_at IS NULL"
+            ") OR ("
+            "status = 'REFUNDED' AND refunded_at IS NOT NULL AND settled_at IS NULL"
+            ")",
+            name='ck_trade_payment_status_timestamps',
+        ),
+    )
+
+    def __repr__(self):
+        return f'<TradePayment id={self.id} trade_id={self.trade_id} status={self.status}>'
+
+
+class PointLedger(db.Model):
+    __tablename__ = 'point_ledger'
+
+    TYPE_ADMIN_GRANT = 'ADMIN_GRANT'
+    TYPE_ESCROW_DEBIT = 'ESCROW_DEBIT'
+    TYPE_ESCROW_REFUND = 'ESCROW_REFUND'
+    TYPE_SETTLEMENT_CREDIT = 'SETTLEMENT_CREDIT'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    user_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    payment_id = db.Column(db.String(36), db.ForeignKey('trade_payment.id'), index=True, nullable=True)
+    trade_id = db.Column(db.String(36), db.ForeignKey('trade.id'), index=True, nullable=True)
+    entry_type = db.Column(db.String(30), nullable=False)
+    amount = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, index=True, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship('User', back_populates='point_ledger_entries', foreign_keys=[user_id])
+    payment = db.relationship('TradePayment', back_populates='ledger_entries', foreign_keys=[payment_id])
+    trade = db.relationship('Trade', foreign_keys=[trade_id])
+
+    __table_args__ = (
+        db.CheckConstraint(
+            f'amount >= 1 AND amount <= {MAX_POINT_BALANCE}',
+            name='ck_point_ledger_amount_range',
+        ),
+        db.CheckConstraint(
+            "entry_type IN ('ADMIN_GRANT', 'ESCROW_DEBIT', 'ESCROW_REFUND', 'SETTLEMENT_CREDIT')",
+            name='ck_point_ledger_entry_type',
+        ),
+        db.CheckConstraint(
+            "("
+            "entry_type = 'ADMIN_GRANT' AND payment_id IS NULL AND trade_id IS NULL"
+            ") OR ("
+            "entry_type IN ('ESCROW_DEBIT', 'ESCROW_REFUND', 'SETTLEMENT_CREDIT') "
+            "AND payment_id IS NOT NULL AND trade_id IS NOT NULL"
+            ")",
+            name='ck_point_ledger_reference_consistency',
+        ),
+        db.UniqueConstraint('payment_id', 'user_id', 'entry_type', name='uq_point_ledger_payment_user_type'),
+    )
+
+    def __repr__(self):
+        return f'<PointLedger id={self.id} user_id={self.user_id} entry_type={self.entry_type}>'
 
 
 # ---------------------------------------------------------------------------

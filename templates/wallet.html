@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}포인트 지갑{% endblock %}
+{% block content %}
+<h2>포인트 지갑</h2>
+
+<p>현재 잔액: {{ wallet.balance }} 포인트</p>
+
+<h3>포인트 내역</h3>
+{% if ledger_entries %}
+  <ul>
+    {% for entry in ledger_entries %}
+      <li>
+        {{ ledger_label(entry.entry_type) }}
+        / 금액: {{ entry.amount }}
+        / 일시: {{ entry.created_at.strftime('%Y-%m-%d %H:%M') }}
+        {% if entry.trade and entry.trade.product %}
+          / 상품:
+          <a href="{{ url_for('view_product', product_id=entry.trade.product.id) }}">{{ entry.trade.product.title }}</a>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>포인트 내역이 없습니다.</p>
+{% endif %}
+
+<p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
+{% endblock %}

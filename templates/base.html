@@ -111,6 +111,7 @@
     {% if session.get('user_id') %}
       <a href="{{ url_for('dashboard') }}">대시보드</a>
       <a href="{{ url_for('mypage') }}">마이페이지</a>
+      <a href="{{ url_for('wallet') }}">포인트</a>
       <a href="{{ url_for('notifications_page') }}">알림</a>
       <a href="{{ url_for('support_list') }}">고객지원</a>
       <a href="{{ url_for('profile') }}">프로필</a>

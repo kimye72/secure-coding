@@ -12,6 +12,7 @@
     <th>사용자명</th>
     <th>역할</th>
     <th>상태</th>
+    <th>테스트 포인트 지급</th>
     <th>작업</th>
   </tr>
   {% for user in users %}
@@ -19,6 +20,16 @@
     <td>{{ user.username }}</td>
     <td>{{ user.role }}</td>
     <td>{% if user.is_active %}ACTIVE{% else %}BANNED{% endif %}</td>
+    <td>
+      <form method="post" action="{{ url_for('admin_user_points_grant', user_id=user.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label>
+          지급 포인트
+          <input type="number" name="amount" min="1" max="1000000" required>
+        </label>
+        <button type="submit">지급</button>
+      </form>
+    </td>
     <td>
       {% if user.role == 'USER' %}
         {% if user.is_active %}
@@ -39,7 +50,7 @@
   </tr>
   {% else %}
   <tr>
-    <td colspan="4">등록된 사용자가 없습니다.</td>
+    <td colspan="5">등록된 사용자가 없습니다.</td>
   </tr>
   {% endfor %}
 </table>

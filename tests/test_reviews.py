@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from market import create_app
 from market.extensions import db
-from market.models import Product, Review, Trade, User
+from market.models import PointLedger, TradePayment, Product, Review, Trade, User
 from scripts.add_reviews_table import (
     create_reviews_table,
     migrate_reviews_schema,
@@ -47,6 +47,28 @@ def _complete_trade(app, trade_id):
         product = db.session.get(Product, trade.product_id)
         trade.status = Trade.STATUS_COMPLETED
         product.status = Product.STATUS_SOLD
+        db.session.commit()
+
+
+def _create_held_payment(app, trade_id):
+    with app.app_context():
+        trade = db.session.get(Trade, trade_id)
+        payment = TradePayment(
+            trade_id=trade.id,
+            buyer_id=trade.buyer_id,
+            seller_id=trade.seller_id,
+            amount=trade.product.price,
+            status=TradePayment.STATUS_HELD,
+        )
+        db.session.add(payment)
+        db.session.flush()
+        db.session.add(PointLedger(
+            user_id=trade.buyer_id,
+            payment_id=payment.id,
+            trade_id=trade.id,
+            entry_type=PointLedger.TYPE_ESCROW_DEBIT,
+            amount=payment.amount,
+        ))
         db.session.commit()
 
 
@@ -124,6 +146,7 @@ def test_seller_cannot_complete_when_buyer_confirmation_is_required(client, app,
 
 
 def test_buyer_can_complete_accepted_trade(client, app, auth_helper, normal_user, second_user, product, accepted_trade):
+    _create_held_payment(app, accepted_trade)
     with app.app_context():
         before_trade = db.session.get(Trade, accepted_trade)
         original = (before_trade.buyer_id, before_trade.seller_id, before_trade.product_id, before_trade.product.price)

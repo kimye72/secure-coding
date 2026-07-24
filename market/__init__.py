@@ -36,6 +36,17 @@ from market.product_images import (
     restore_product_image_backups,
     stage_product_image,
 )
+from market.points import (
+    MAX_ADMIN_POINT_GRANT,
+    MAX_POINT_BALANCE,
+    PointError,
+    authoritative_trade_amount,
+    credit_wallet,
+    debit_wallet,
+    ensure_wallet,
+    ledger_label,
+    parse_positive_int,
+)
 from market.support_tickets import (
     SupportTicketValidationError,
     normalize_support_body,
@@ -414,7 +425,19 @@ def _resolve_report_target(target_type, target_id):
 
 def _register_routes(app):
     """모든 애플리케이션 라우트를 등록한다."""
-    from market.models import User, Product, Trade, Review, KeywordSubscription, Notification, Report, SupportTicket
+    from market.models import (
+        User,
+        Product,
+        Trade,
+        Review,
+        KeywordSubscription,
+        Notification,
+        Report,
+        SupportTicket,
+        PointWallet,
+        TradePayment,
+        PointLedger,
+    )
 
     login_required = _get_login_required(app)
 
@@ -426,6 +449,8 @@ def _register_routes(app):
     notification_read_limit = limiter.shared_limit('60 per hour', scope='notification-read-actions', key_func=_rate_limit_identity, methods=['POST'])
     support_ticket_create_limit = limiter.shared_limit('5 per hour', scope='support-ticket-create-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_support_update_limit = limiter.shared_limit('60 per hour', scope='admin-support-ticket-actions', key_func=_rate_limit_identity, methods=['POST'])
+    admin_point_grant_limit = limiter.shared_limit('30 per hour', scope='admin-point-grant-actions', key_func=_rate_limit_identity, methods=['POST'])
+    trade_payment_action_limit = limiter.shared_limit('20 per hour', scope='trade-payment-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_user_action_limit = limiter.shared_limit('30 per hour', scope='admin-user-actions', key_func=_rate_limit_identity, methods=['POST'])
 
@@ -554,6 +579,8 @@ def _register_routes(app):
 
             try:
                 db.session.add(new_user)
+                db.session.flush()
+                db.session.add(PointWallet(user_id=new_user.id, balance=0))
                 db.session.commit()
             except IntegrityError:
                 db.session.rollback()
@@ -710,6 +737,35 @@ def _register_routes(app):
             user=user,
             products=products,
             product_image_ids=product_image_ids,
+        )
+
+    # -------------------------------------------------------------------
+    # 포인트 지갑
+    # -------------------------------------------------------------------
+
+    @app.route('/wallet')
+    @login_required
+    def wallet():
+        current_user_id = session['user_id']
+        try:
+            wallet = ensure_wallet(current_user_id)
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('포인트 지갑을 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.')
+            return redirect(url_for('dashboard'))
+
+        ledger_entries = (
+            PointLedger.query
+            .filter(PointLedger.user_id == current_user_id)
+            .order_by(PointLedger.created_at.desc(), PointLedger.id.asc())
+            .all()
+        )
+        return render_template(
+            'wallet.html',
+            wallet=wallet,
+            ledger_entries=ledger_entries,
+            ledger_label=ledger_label,
         )
 
     # -------------------------------------------------------------------
@@ -1356,7 +1412,120 @@ def _register_routes(app):
             incoming_trades=incoming_trades,
             current_user_id=current_user_id,
             reviewed_trade_ids=reviewed_trade_ids,
+            max_point_balance=MAX_POINT_BALANCE,
         )
+
+    # -------------------------------------------------------------------
+    # 거래 결제 — POST /trade/<trade_id>/pay
+    # -------------------------------------------------------------------
+
+    @app.route('/trade/<trade_id>/pay', methods=['POST'])
+    @trade_payment_action_limit
+    @login_required
+    def trade_pay(trade_id):
+        current_user_id = session['user_id']
+        validated_trade_id = _normalize_trade_id(trade_id)
+        if validated_trade_id is None:
+            flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        trade = db.session.get(Trade, validated_trade_id)
+        if trade is None or trade.buyer_id != current_user_id:
+            flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        if trade.status != Trade.STATUS_ACCEPTED:
+            flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        product = db.session.get(Product, trade.product_id)
+        if product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
+            flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        if trade.buyer_id == trade.seller_id:
+            flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        existing_payment = TradePayment.query.filter_by(trade_id=trade.id).first()
+        if existing_payment is not None:
+            if existing_payment.status in (TradePayment.STATUS_HELD, TradePayment.STATUS_SETTLED):
+                flash('이미 결제가 처리되었습니다.')
+            else:
+                flash('결제를 처리할 수 없습니다.')
+            return redirect(url_for('trades'))
+
+        try:
+            claim = db.session.execute(
+                db.update(Trade)
+                .where(
+                    Trade.id == trade.id,
+                    Trade.buyer_id == current_user_id,
+                    Trade.status == Trade.STATUS_ACCEPTED,
+                )
+                .values(updated_at=datetime.utcnow())
+                .execution_options(synchronize_session=False)
+            )
+            if claim.rowcount != 1:
+                db.session.rollback()
+                flash('결제를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            db.session.expire_all()
+            trade = db.session.get(Trade, validated_trade_id)
+            product = db.session.get(Product, trade.product_id) if trade is not None else None
+            if trade is None or product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
+                db.session.rollback()
+                flash('결제를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            existing_payment = TradePayment.query.filter_by(trade_id=trade.id).first()
+            if existing_payment is not None:
+                db.session.rollback()
+                if existing_payment.status in (TradePayment.STATUS_HELD, TradePayment.STATUS_SETTLED):
+                    flash('이미 결제가 처리되었습니다.')
+                else:
+                    flash('결제를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            try:
+                amount = authoritative_trade_amount(trade)
+            except PointError:
+                db.session.rollback()
+                flash('결제를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            if not debit_wallet(trade.buyer_id, amount):
+                db.session.rollback()
+                flash('포인트 잔액이 부족합니다.')
+                return redirect(url_for('trades'))
+
+            payment = TradePayment(
+                trade_id=trade.id,
+                buyer_id=trade.buyer_id,
+                seller_id=trade.seller_id,
+                amount=amount,
+                status=TradePayment.STATUS_HELD,
+            )
+            db.session.add(payment)
+            db.session.flush()
+            db.session.add(PointLedger(
+                user_id=trade.buyer_id,
+                payment_id=payment.id,
+                trade_id=trade.id,
+                entry_type=PointLedger.TYPE_ESCROW_DEBIT,
+                amount=amount,
+            ))
+            db.session.commit()
+            flash('결제가 완료되어 포인트가 에스크로에 보관되었습니다.')
+        except IntegrityError:
+            db.session.rollback()
+            flash('결제를 처리할 수 없습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('결제 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('trades'))
 
     # -------------------------------------------------------------------
     # 거래 수락 — POST /trade/<trade_id>/accept
@@ -1498,8 +1667,20 @@ def _register_routes(app):
                 flash(_TRADE_AUTH_ERROR)
                 return redirect(url_for('trades'))
             try:
-                trade.status = Trade.STATUS_CANCELLED
-                # 상품 상태 변경 없음
+                result = db.session.execute(
+                    db.update(Trade)
+                    .where(
+                        Trade.id == trade.id,
+                        Trade.buyer_id == current_user_id,
+                        Trade.status == Trade.STATUS_PENDING,
+                    )
+                    .values(status=Trade.STATUS_CANCELLED, updated_at=datetime.utcnow())
+                    .execution_options(synchronize_session=False)
+                )
+                if result.rowcount != 1:
+                    db.session.rollback()
+                    flash(_TRADE_AUTH_ERROR)
+                    return redirect(url_for('trades'))
                 db.session.commit()
                 flash('거래 요청이 취소되었습니다.')
             except SQLAlchemyError:
@@ -1511,11 +1692,89 @@ def _register_routes(app):
             if product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
                 flash(_TRADE_AUTH_ERROR)
                 return redirect(url_for('trades'))
+            payment = TradePayment.query.filter_by(trade_id=trade.id).first()
+            if payment is not None and payment.status == TradePayment.STATUS_SETTLED:
+                flash(_TRADE_AUTH_ERROR)
+                return redirect(url_for('trades'))
             try:
-                trade.status = Trade.STATUS_CANCELLED
-                product.status = Product.STATUS_SELLING  # 상품 상태 복구
+                trade_result = db.session.execute(
+                    db.update(Trade)
+                    .where(
+                        Trade.id == trade.id,
+                        Trade.status == Trade.STATUS_ACCEPTED,
+                    )
+                    .values(status=Trade.STATUS_CANCELLED, updated_at=datetime.utcnow())
+                    .execution_options(synchronize_session=False)
+                )
+                if trade_result.rowcount != 1:
+                    db.session.rollback()
+                    flash(_TRADE_AUTH_ERROR)
+                    return redirect(url_for('trades'))
+
+                db.session.expire_all()
+                trade = db.session.get(Trade, trade.id)
+                product = db.session.get(Product, trade.product_id) if trade is not None else None
+                if trade is None or product is None or product.seller_id != trade.seller_id or product.status != Product.STATUS_RESERVED:
+                    db.session.rollback()
+                    flash(_TRADE_AUTH_ERROR)
+                    return redirect(url_for('trades'))
+
+                payment = TradePayment.query.filter_by(trade_id=trade.id).first()
+                if payment is not None and payment.status == TradePayment.STATUS_SETTLED:
+                    db.session.rollback()
+                    flash(_TRADE_AUTH_ERROR)
+                    return redirect(url_for('trades'))
+
+                if payment is not None and payment.status == TradePayment.STATUS_HELD:
+                    refunded_at = datetime.utcnow()
+                    payment_result = db.session.execute(
+                        db.update(TradePayment)
+                        .where(
+                            TradePayment.id == payment.id,
+                            TradePayment.status == TradePayment.STATUS_HELD,
+                        )
+                        .values(
+                            status=TradePayment.STATUS_REFUNDED,
+                            refunded_at=refunded_at,
+                            updated_at=refunded_at,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                    if payment_result.rowcount != 1:
+                        db.session.rollback()
+                        flash(_TRADE_AUTH_ERROR)
+                        return redirect(url_for('trades'))
+                    if not credit_wallet(trade.buyer_id, payment.amount):
+                        db.session.rollback()
+                        flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                        return redirect(url_for('trades'))
+                    db.session.add(PointLedger(
+                        user_id=trade.buyer_id,
+                        payment_id=payment.id,
+                        trade_id=trade.id,
+                        entry_type=PointLedger.TYPE_ESCROW_REFUND,
+                        amount=payment.amount,
+                    ))
+                elif payment is not None and payment.status == TradePayment.STATUS_REFUNDED:
+                    pass
+                product_result = db.session.execute(
+                    db.update(Product)
+                    .where(
+                        Product.id == product.id,
+                        Product.status == Product.STATUS_RESERVED,
+                    )
+                    .values(status=Product.STATUS_SELLING, updated_at=datetime.utcnow())
+                    .execution_options(synchronize_session=False)
+                )
+                if product_result.rowcount != 1:
+                    db.session.rollback()
+                    flash(_TRADE_AUTH_ERROR)
+                    return redirect(url_for('trades'))
                 db.session.commit()
                 flash('거래가 취소되었습니다. 상품이 다시 판매 중 상태로 변경되었습니다.')
+            except IntegrityError:
+                db.session.rollback()
+                flash('거래를 처리할 수 없습니다.')
             except SQLAlchemyError:
                 db.session.rollback()
                 flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
@@ -1545,6 +1804,8 @@ def _register_routes(app):
             flash('거래를 처리할 수 없습니다.')
             return redirect(url_for('trades'))
 
+        payment = TradePayment.query.filter_by(trade_id=trade.id).first()
+
         if trade.status == Trade.STATUS_COMPLETED:
             flash('이미 완료된 거래입니다.')
             return redirect(url_for('trades'))
@@ -1558,11 +1819,74 @@ def _register_routes(app):
             flash('거래를 처리할 수 없습니다.')
             return redirect(url_for('trades'))
 
+        if payment is None or payment.status != TradePayment.STATUS_HELD:
+            flash('결제 완료 후 거래를 완료할 수 있습니다.')
+            return redirect(url_for('trades'))
+
         try:
-            trade.status = Trade.STATUS_COMPLETED
-            product.status = Product.STATUS_SOLD
+            settled_at = datetime.utcnow()
+            trade_result = db.session.execute(
+                db.update(Trade)
+                .where(
+                    Trade.id == trade.id,
+                    Trade.status == Trade.STATUS_ACCEPTED,
+                )
+                .values(status=Trade.STATUS_COMPLETED, updated_at=settled_at)
+                .execution_options(synchronize_session=False)
+            )
+            if trade_result.rowcount != 1:
+                db.session.rollback()
+                flash('거래를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            payment_result = db.session.execute(
+                db.update(TradePayment)
+                .where(
+                    TradePayment.id == payment.id,
+                    TradePayment.status == TradePayment.STATUS_HELD,
+                )
+                .values(
+                    status=TradePayment.STATUS_SETTLED,
+                    settled_at=settled_at,
+                    updated_at=settled_at,
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if payment_result.rowcount != 1:
+                db.session.rollback()
+                flash('거래를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            product_result = db.session.execute(
+                db.update(Product)
+                .where(
+                    Product.id == product.id,
+                    Product.status == Product.STATUS_RESERVED,
+                )
+                .values(status=Product.STATUS_SOLD, updated_at=settled_at)
+                .execution_options(synchronize_session=False)
+            )
+            if product_result.rowcount != 1:
+                db.session.rollback()
+                flash('거래를 처리할 수 없습니다.')
+                return redirect(url_for('trades'))
+
+            if not credit_wallet(trade.seller_id, payment.amount):
+                db.session.rollback()
+                flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('trades'))
+            db.session.add(PointLedger(
+                user_id=trade.seller_id,
+                payment_id=payment.id,
+                trade_id=trade.id,
+                entry_type=PointLedger.TYPE_SETTLEMENT_CREDIT,
+                amount=payment.amount,
+            ))
             db.session.commit()
             flash('거래가 완료되었습니다.')
+        except IntegrityError:
+            db.session.rollback()
+            flash('거래를 처리할 수 없습니다.')
         except SQLAlchemyError:
             db.session.rollback()
             flash('거래 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
@@ -1793,6 +2117,53 @@ def _register_routes(app):
     def admin_users():
         users = User.query.order_by(User.username.asc(), User.id.asc()).all()
         return render_template('admin_users.html', users=users)
+
+    @app.route('/admin/user/<user_id>/points/grant', methods=['POST'])
+    @admin_point_grant_limit
+    @admin_required
+    def admin_user_points_grant(user_id):
+        target_user_id = _normalize_uuid(user_id)
+        if target_user_id is None:
+            flash('포인트를 지급할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        target = db.session.get(User, target_user_id)
+        if target is None:
+            flash('포인트를 지급할 수 없습니다.')
+            return redirect(url_for('admin_users'))
+
+        try:
+            amount = parse_positive_int(
+                request.form.get('amount'),
+                maximum=MAX_ADMIN_POINT_GRANT,
+            )
+        except PointError:
+            flash('포인트 지급 금액을 올바르게 입력해 주세요.')
+            return redirect(url_for('admin_users'))
+
+        try:
+            if not credit_wallet(target.id, amount):
+                db.session.rollback()
+                flash('포인트를 지급할 수 없습니다.')
+                return redirect(url_for('admin_users'))
+
+            db.session.add(PointLedger(
+                user_id=target.id,
+                payment_id=None,
+                trade_id=None,
+                entry_type=PointLedger.TYPE_ADMIN_GRANT,
+                amount=amount,
+            ))
+            db.session.commit()
+            flash('테스트 포인트가 지급되었습니다.')
+        except IntegrityError:
+            db.session.rollback()
+            flash('포인트를 지급할 수 없습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('포인트 지급 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('admin_users'))
 
     # -------------------------------------------------------------------
     # 관리자 - 사용자 BAN
