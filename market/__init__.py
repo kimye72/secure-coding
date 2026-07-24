@@ -36,6 +36,11 @@ from market.product_images import (
     restore_product_image_backups,
     stage_product_image,
 )
+from market.support_tickets import (
+    SupportTicketValidationError,
+    normalize_support_body,
+    normalize_support_title,
+)
 from flask_limiter.util import get_remote_address
 
 
@@ -409,7 +414,7 @@ def _resolve_report_target(target_type, target_id):
 
 def _register_routes(app):
     """모든 애플리케이션 라우트를 등록한다."""
-    from market.models import User, Product, Trade, Review, KeywordSubscription, Notification, Report
+    from market.models import User, Product, Trade, Review, KeywordSubscription, Notification, Report, SupportTicket
 
     login_required = _get_login_required(app)
 
@@ -419,6 +424,8 @@ def _register_routes(app):
     keyword_create_limit = limiter.shared_limit('20 per hour', scope='keyword-create-actions', key_func=_rate_limit_identity, methods=['POST'])
     keyword_delete_limit = limiter.shared_limit('40 per hour', scope='keyword-delete-actions', key_func=_rate_limit_identity, methods=['POST'])
     notification_read_limit = limiter.shared_limit('60 per hour', scope='notification-read-actions', key_func=_rate_limit_identity, methods=['POST'])
+    support_ticket_create_limit = limiter.shared_limit('5 per hour', scope='support-ticket-create-actions', key_func=_rate_limit_identity, methods=['POST'])
+    admin_support_update_limit = limiter.shared_limit('60 per hour', scope='admin-support-ticket-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_report_action_limit = limiter.shared_limit('30 per hour', scope='admin-report-actions', key_func=_rate_limit_identity, methods=['POST'])
     admin_user_action_limit = limiter.shared_limit('30 per hour', scope='admin-user-actions', key_func=_rate_limit_identity, methods=['POST'])
 
@@ -427,6 +434,18 @@ def _register_routes(app):
 
     # 편집/삭제 시 공통으로 사용하는 권한 없음 메시지
     _PRODUCT_AUTH_ERROR = '상품을 찾을 수 없거나 수정 권한이 없습니다.'
+    _SUPPORT_AUTH_ERROR = '문의 내역을 확인할 수 없습니다.'
+    _SUPPORT_CATEGORIES = {
+        SupportTicket.CATEGORY_BUG,
+        SupportTicket.CATEGORY_TRADE,
+        SupportTicket.CATEGORY_ACCOUNT,
+        SupportTicket.CATEGORY_OTHER,
+    }
+    _SUPPORT_STATUSES = {
+        SupportTicket.STATUS_OPEN,
+        SupportTicket.STATUS_IN_PROGRESS,
+        SupportTicket.STATUS_RESOLVED,
+    }
 
     def _build_product_notifications(product):
         subscriptions = (
@@ -833,6 +852,80 @@ def _register_routes(app):
             flash('알림 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
 
         return redirect(url_for('notifications_page'))
+
+    # -------------------------------------------------------------------
+    # 고객지원 — 사용자 문의
+    # -------------------------------------------------------------------
+
+    @app.route('/support')
+    @login_required
+    def support_list():
+        current_user_id = session['user_id']
+        tickets = (
+            SupportTicket.query
+            .filter(SupportTicket.user_id == current_user_id)
+            .order_by(SupportTicket.created_at.desc(), SupportTicket.id.asc())
+            .all()
+        )
+        return render_template('support_list.html', tickets=tickets)
+
+    @app.route('/support/new', methods=['GET', 'POST'])
+    @support_ticket_create_limit
+    @login_required
+    def support_new():
+        if request.method == 'POST':
+            category = (request.form.get('category') or '').strip()
+            if category not in _SUPPORT_CATEGORIES:
+                flash('문의 내용을 올바르게 입력해 주세요.')
+                return redirect(url_for('support_new'))
+
+            try:
+                title = normalize_support_title(request.form.get('title'))
+                content = normalize_support_body(request.form.get('content'), required=True)
+            except SupportTicketValidationError:
+                flash('문의 내용을 올바르게 입력해 주세요.')
+                return redirect(url_for('support_new'))
+
+            ticket = SupportTicket(
+                user_id=session['user_id'],
+                category=category,
+                title=title,
+                content=content,
+                status=SupportTicket.STATUS_OPEN,
+            )
+            try:
+                db.session.add(ticket)
+                db.session.commit()
+                flash('문의가 접수되었습니다.')
+                return redirect(url_for('support_detail', ticket_id=ticket.id))
+            except IntegrityError:
+                db.session.rollback()
+                flash('문의를 접수할 수 없습니다.')
+                return redirect(url_for('support_new'))
+            except SQLAlchemyError:
+                db.session.rollback()
+                flash('문의 접수 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+                return redirect(url_for('support_new'))
+
+        return render_template(
+            'support_form.html',
+            categories=sorted(_SUPPORT_CATEGORIES),
+        )
+
+    @app.route('/support/<ticket_id>')
+    @login_required
+    def support_detail(ticket_id):
+        validated_ticket_id = _normalize_uuid(ticket_id)
+        if validated_ticket_id is None:
+            flash(_SUPPORT_AUTH_ERROR)
+            return redirect(url_for('support_list'))
+
+        ticket = db.session.get(SupportTicket, validated_ticket_id)
+        if ticket is None or ticket.user_id != session['user_id']:
+            flash(_SUPPORT_AUTH_ERROR)
+            return redirect(url_for('support_list'))
+
+        return render_template('support_detail.html', ticket=ticket, is_admin_view=False)
 
     # -------------------------------------------------------------------
     # 새 상품 등록 (강화된 버전)
@@ -1614,6 +1707,82 @@ def _register_routes(app):
     # -------------------------------------------------------------------
 
     admin_required = _get_admin_required(app)
+
+    # -------------------------------------------------------------------
+    # 관리자 - 고객지원 문의
+    # -------------------------------------------------------------------
+
+    @app.route('/admin/support')
+    @admin_required
+    def admin_support_list():
+        status_filter = (request.args.get('status') or '').strip().upper()
+        selected_status = status_filter if status_filter in _SUPPORT_STATUSES else ''
+        q = SupportTicket.query
+        if selected_status:
+            q = q.filter(SupportTicket.status == selected_status)
+
+        tickets = q.order_by(SupportTicket.created_at.desc(), SupportTicket.id.asc()).all()
+        return render_template(
+            'admin_support_list.html',
+            tickets=tickets,
+            statuses=sorted(_SUPPORT_STATUSES),
+            status_filter=selected_status,
+        )
+
+    @app.route('/admin/support/<ticket_id>')
+    @admin_required
+    def admin_support_detail(ticket_id):
+        validated_ticket_id = _normalize_uuid(ticket_id)
+        if validated_ticket_id is None:
+            flash('문의 내역을 확인할 수 없습니다.')
+            return redirect(url_for('admin_support_list'))
+
+        ticket = db.session.get(SupportTicket, validated_ticket_id)
+        if ticket is None:
+            flash('문의 내역을 확인할 수 없습니다.')
+            return redirect(url_for('admin_support_list'))
+
+        return render_template(
+            'admin_support_detail.html',
+            ticket=ticket,
+            statuses=sorted(_SUPPORT_STATUSES),
+        )
+
+    @app.route('/admin/support/<ticket_id>/update', methods=['POST'])
+    @admin_support_update_limit
+    @admin_required
+    def admin_support_update(ticket_id):
+        validated_ticket_id = _normalize_uuid(ticket_id)
+        if validated_ticket_id is None:
+            flash('문의 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_support_list'))
+
+        ticket = db.session.get(SupportTicket, validated_ticket_id)
+        if ticket is None:
+            flash('문의 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_support_list'))
+
+        status = (request.form.get('status') or '').strip()
+        if status not in _SUPPORT_STATUSES:
+            flash('문의 상태를 변경할 수 없습니다.')
+            return redirect(url_for('admin_support_detail', ticket_id=ticket.id))
+
+        try:
+            admin_response = normalize_support_body(request.form.get('admin_response'), required=False)
+        except SupportTicketValidationError:
+            flash('문의 답변을 올바르게 입력해 주세요.')
+            return redirect(url_for('admin_support_detail', ticket_id=ticket.id))
+
+        try:
+            ticket.status = status
+            ticket.admin_response = admin_response
+            db.session.commit()
+            flash('문의 상태가 업데이트되었습니다.')
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('문의 상태 변경 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.')
+
+        return redirect(url_for('admin_support_detail', ticket_id=ticket.id))
 
     # -------------------------------------------------------------------
     # 관리자 - 사용자 관리

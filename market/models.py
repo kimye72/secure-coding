@@ -45,6 +45,7 @@ class User(db.Model):
     received_reviews = db.relationship('Review', back_populates='reviewee', foreign_keys='Review.reviewee_id')
     keyword_subscriptions = db.relationship('KeywordSubscription', back_populates='user', foreign_keys='KeywordSubscription.user_id')
     notifications = db.relationship('Notification', back_populates='user', foreign_keys='Notification.user_id')
+    support_tickets = db.relationship('SupportTicket', back_populates='user', foreign_keys='SupportTicket.user_id')
 
     __table_args__ = (
         db.CheckConstraint("role IN ('USER', 'ADMIN')", name='ck_user_role'),
@@ -271,3 +272,51 @@ class Report(db.Model):
 
     def __repr__(self):
         return f'<Report id={self.id} target_type={self.target_type} status={self.status}>'
+
+
+# ---------------------------------------------------------------------------
+# SupportTicket
+# ---------------------------------------------------------------------------
+
+class SupportTicket(db.Model):
+    __tablename__ = 'support_ticket'
+
+    CATEGORY_BUG = 'BUG'
+    CATEGORY_TRADE = 'TRADE'
+    CATEGORY_ACCOUNT = 'ACCOUNT'
+    CATEGORY_OTHER = 'OTHER'
+
+    STATUS_OPEN = 'OPEN'
+    STATUS_IN_PROGRESS = 'IN_PROGRESS'
+    STATUS_RESOLVED = 'RESOLVED'
+
+    id = db.Column(db.String(36), primary_key=True, default=generate_uuid)
+    user_id = db.Column(db.String(36), db.ForeignKey('user.id'), index=True, nullable=False)
+    category = db.Column(db.String(20), nullable=False)
+    title = db.Column(db.String(120), nullable=False)
+    content = db.Column(db.String(2000), nullable=False)
+    status = db.Column(db.String(20), index=True, nullable=False, default='OPEN')
+    admin_response = db.Column(db.String(2000), nullable=True)
+    created_at = db.Column(db.DateTime, index=True, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = db.relationship('User', back_populates='support_tickets', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "category IN ('BUG', 'TRADE', 'ACCOUNT', 'OTHER')",
+            name='ck_support_ticket_category',
+        ),
+        db.CheckConstraint(
+            "status IN ('OPEN', 'IN_PROGRESS', 'RESOLVED')",
+            name='ck_support_ticket_status',
+        ),
+    )
+
+    def __repr__(self):
+        return f'<SupportTicket id={self.id} status={self.status}>'

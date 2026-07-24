@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}고객지원{% endblock %}
+{% block content %}
+<h2>고객지원</h2>
+
+<p><a href="{{ url_for('support_new') }}">새 문의 작성</a></p>
+
+{% if tickets %}
+<table border="1">
+  <tr>
+    <th>카테고리</th>
+    <th>제목</th>
+    <th>상태</th>
+    <th>작성일</th>
+    <th>상세</th>
+  </tr>
+  {% for ticket in tickets %}
+  <tr>
+    <td>{{ ticket.category }}</td>
+    <td>{{ ticket.title }}</td>
+    <td>{{ ticket.status }}</td>
+    <td>{{ ticket.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    <td><a href="{{ url_for('support_detail', ticket_id=ticket.id) }}">상세보기</a></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>접수한 문의가 없습니다.</p>
+{% endif %}
+
+<p><a href="{{ url_for('dashboard') }}">대시보드로 돌아가기</a></p>
+{% endblock %}
